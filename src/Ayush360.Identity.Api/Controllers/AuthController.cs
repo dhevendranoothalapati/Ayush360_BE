@@ -34,7 +34,7 @@ public sealed class AuthController(AuthService auth, ICurrentUser currentUser) :
 
     [HttpPost("refresh")]
     [AllowAnonymous]
-    [EnableRateLimiting(RateLimits.Login)]
+    [EnableRateLimiting(RateLimits.Refresh)]
     public async Task<ActionResult<LoginResponse>> Refresh(CancellationToken ct)
     {
         var session = await auth.RefreshAsync(Request.Cookies[RefreshCookieName], ClientIp(), ct);
