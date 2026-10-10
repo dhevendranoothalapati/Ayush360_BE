@@ -1,0 +1,14 @@
+$kind: http-request
+name: 6. front-desk -> 200
+description: ""
+url: "{{hms}}/api/platform-check/front-desk"
+method: GET
+auth:
+  type: bearer
+  credentials:
+    token: "{{token}}"
+scripts:
+  - type: afterResponse
+    code: pm.test("Status is 200", () => pm.response.to.have.status(200));
+    language: text/javascript
+order: 6000

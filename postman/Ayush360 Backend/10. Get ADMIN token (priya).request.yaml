@@ -1,0 +1,44 @@
+$kind: http-request
+description: ""
+url: "{{identity}}/api/dev/token"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "userId": 3,
+      "userName": "priya",
+      "displayName": "Priya",
+      "roles": [
+        "Admin"
+      ],
+      "permissions": [
+        "PATIENT_VIEW",
+        "PATIENT_CREATE",
+        "PATIENT_EDIT",
+        "REGISTRATION_CREATE",
+        "PAYMENT_COLLECT",
+        "QUEUE_VIEW",
+        "COLLECTION_VIEW_ALL"
+      ],
+      "modules": [
+        "REGISTRATION",
+        "BILLING",
+        "DOCTOR",
+        "NURSE",
+        "PHARMACY",
+        "LAB",
+        "PAYROLL"
+      ]
+    }
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test("Status is 200", () => pm.response.to.have.status(200));
+      pm.collectionVariables.set("adminToken", pm.response.json().accessToken);
+    language: text/javascript
+order: 10000

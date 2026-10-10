@@ -1,0 +1,34 @@
+# Open in VS Code with the "REST Client" extension and click "Send Request".
+@identity = http://localhost:5077
+
+### Health (no token needed) - should say Healthy
+GET {{identity}}/health
+
+### 1) Login as receptionist DN10110 (Devendra N, Swetha). Demo password: demo123
+# @name login
+POST {{identity}}/api/auth/login
+Content-Type: application/json
+
+{ "username": "DN10110", "password": "demo123" }
+
+### 2) Who am I (user, hospital, roles, permissions, licensed modules)
+GET {{identity}}/api/auth/me
+Authorization: Bearer {{login.response.body.accessToken}}
+
+### 3) New access token using the refresh cookie set by login
+POST {{identity}}/api/auth/refresh
+
+### 4) Sign out (cancels the refresh cookie)
+POST {{identity}}/api/auth/logout
+
+### Wrong password -> 400 "Invalid username or password." (5 in a row locks the account for 15 min)
+POST {{identity}}/api/auth/login
+Content-Type: application/json
+
+{ "username": "DN10110", "password": "wrong" }
+
+### Other demo logins: PS10210 (admin, Swetha), SR10310 (doctor), MS10410 (Dr. Meera Shah), HA10120 (Green Valley)
+POST {{identity}}/api/auth/login
+Content-Type: application/json
+
+{ "username": "PS10210", "password": "demo123" }

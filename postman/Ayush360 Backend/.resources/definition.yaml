@@ -1,0 +1,7 @@
+$kind: collection
+description: "Platform checks for the Identity and HMS APIs. Run the APIs first (VS Code: Identity + HMS, F5). Use Run collection to run all in order."
+variables:
+  identity: http://localhost:5077
+  hms: http://localhost:5041
+  token: ""
+  adminToken: ""

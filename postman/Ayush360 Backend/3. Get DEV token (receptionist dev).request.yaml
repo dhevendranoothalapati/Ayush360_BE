@@ -1,0 +1,18 @@
+$kind: http-request
+description: Development only. Saves the token into the collection variable {{token}}.
+url: "{{identity}}/api/dev/token"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: "{}"
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test("Status is 200", () => pm.response.to.have.status(200));
+      pm.collectionVariables.set("token", pm.response.json().accessToken);
+    language: text/javascript
+order: 3000

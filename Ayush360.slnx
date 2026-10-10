@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Ayush360.Hms.Api/Ayush360.Hms.Api.csproj" />
+    <Project Path="src/Ayush360.Identity.Api/Ayush360.Identity.Api.csproj" />
+    <Project Path="src/Ayush360.Platform/Ayush360.Platform.csproj" />
+  </Folder>
+</Solution>
