@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Ayush360.Hms.Api.Consultations;
 using Ayush360.Hms.Api.Data;
 using Ayush360.Hms.Api.Data.Entities;
 using Ayush360.Platform.Data;
@@ -21,6 +22,8 @@ public sealed partial class RegistrationService(
     NumberSequenceService sequences,
     HospitalClock clock,
     ICurrentUser currentUser,
+    AadhaarProtector aadhaar,
+    DoctorAvailabilityService availability,
     ILogger<RegistrationService> logger)
 {
     // ------------------------------------------------------------------ masters
@@ -60,9 +63,12 @@ public sealed partial class RegistrationService(
         var like = $"%{term}%";
         var digits = new string(term.Where(char.IsDigit).ToArray());
         var digitsLike = $"%{digits}%";
+        // A full 12-digit Aadhaar matches by its fingerprint (the number itself isn't stored).
+        var aadhaarHash = AadhaarProtector.IsValid(digits) ? aadhaar.Hash(digits) : null;
 
         var patients = await db.Patients
-            .Where(p => EF.Functions.ILike(p.PatientNumber, like)
+            .Where(p => (aadhaarHash != null && p.AadhaarHash == aadhaarHash)
+                        || EF.Functions.ILike(p.PatientNumber, like)
                         || (digits.Length >= 3 && p.MobileNumber != null && EF.Functions.Like(p.MobileNumber, digitsLike))
                         || EF.Functions.ILike(p.FirstName + " " + (p.LastName ?? ""), like))
             .OrderByDescending(p => p.LastVisitDate)
@@ -81,7 +87,9 @@ public sealed partial class RegistrationService(
     {
         Require("PATIENT_EDIT");
         var patient = await FindPatientAsync(id, ct);
-        ThrowIfErrors(ValidatePatient(input, emergency: false));
+        var errors = ValidatePatient(input, emergency: false);
+        await CheckAadhaarNotUsedAsync(input, patient.Id, errors, ct);
+        ThrowIfErrors(errors);
         ApplyPatient(patient, input);
         await db.SaveChangesAsync(ct);
         return ToDto(patient);
@@ -207,12 +215,14 @@ public sealed partial class RegistrationService(
             {
                 Require("PATIENT_EDIT");
                 Merge(errors, ValidatePatient(request.Patient, acute));
+                await CheckAadhaarNotUsedAsync(request.Patient, patient.Id, errors, ct);
             }
         }
         else if (request.Patient is not null)
         {
             Require("PATIENT_CREATE");
             Merge(errors, ValidatePatient(request.Patient, acute));
+            await CheckAadhaarNotUsedAsync(request.Patient, null, errors, ct);
             isNewPatient = true;
         }
         else
@@ -483,6 +493,186 @@ public sealed partial class RegistrationService(
         return new TodaySummaryDto(registered, waiting, newPatients, mine, total);
     }
 
+    // ------------------------------------------------------------------ patient queue (front desk)
+
+    // Every patient registered for a day, all doctors, with their latest status.
+    // Deliberately NO clinical details (diagnosis, medicines, notes): the desk only needs where the patient is.
+    public async Task<FrontDeskQueueDto> GetQueueAsync(string? date, CancellationToken ct)
+    {
+        Require("QUEUE_VIEW");
+        var day = DateOnly.TryParseExact(date, "yyyy-MM-dd", out var parsed) ? parsed : clock.Today;
+
+        var rows = await db.Visits.AsNoTracking()
+            .Where(v => v.VisitDate == day && v.VisitStatus != VisitStatus.Cancelled)
+            .OrderBy(v => v.CreatedAt)
+            .Select(v => new
+            {
+                Visit = v,
+                v.Patient,
+                DoctorName = v.Doctor.FullName,
+                DepartmentName = v.Department.Name,
+                IsReturning = db.Visits.Any(o => o.PatientId == v.PatientId && o.CreatedAt < v.CreatedAt
+                                                 && o.VisitStatus != VisitStatus.Cancelled),
+                Encounter = db.Encounters
+                    .Where(e => e.VisitId == v.Id)
+                    .Select(e => new { e.StartedAt, e.CompletedAt, e.FollowUpDate, e.AdmissionRequested, e.AdmissionType })
+                    .FirstOrDefault(),
+                LabTests = db.LabOrders.Count(o => o.VisitId == v.Id && o.Status != LabOrderStatus.Cancelled),
+                LabPending = db.LabOrders.Count(o => o.VisitId == v.Id
+                                                     && (o.Status == LabOrderStatus.Ordered || o.Status == LabOrderStatus.SampleCollected)),
+            })
+            .ToListAsync(ct);
+
+        var items = rows.Select(r => new FrontDeskQueueItemDto(
+                r.Visit.Id,
+                r.Visit.TokenNumber,
+                r.Visit.VisitNumber,
+                EnumText.ToCode(r.Visit.RegistrationType),
+                r.Patient.Id,
+                r.Patient.PatientNumber,
+                string.Join(' ', new[] { r.Patient.FirstName, r.Patient.MiddleName, r.Patient.LastName }
+                    .Where(s => !string.IsNullOrWhiteSpace(s))),
+                EnumText.ToCode(r.Patient.Gender),
+                QueueAge(r.Patient.DateOfBirth, day),
+                r.Patient.MobileNumber ?? "",
+                r.Visit.DoctorId,
+                r.DoctorName,
+                r.DepartmentName,
+                r.Visit.ReasonForVisit ?? "",
+                r.Visit.CreatedAt,
+                EnumText.ToCode(r.Visit.QueueStatus),
+                r.Visit.TriageLevel is { } triage ? EnumText.ToCode(triage) : "",
+                r.Visit.IsFollowUp,
+                r.IsReturning,
+                EnumText.ToCode(r.Visit.PaymentStatus),
+                r.Visit.ConsultationFee,
+                EnumText.ToCode(r.Visit.PayerType),
+                r.Encounter?.StartedAt,
+                r.Encounter?.CompletedAt,
+                QueueLabStatus(r.Visit.QueueStatus, r.LabTests, r.LabPending),
+                r.Encounter?.FollowUpDate?.ToString("yyyy-MM-dd") ?? "",
+                r.Encounter is { AdmissionRequested: true, AdmissionType: { } admission } ? EnumText.ToCode(admission) : ""))
+            .ToList();
+
+        var counts = new FrontDeskQueueCountsDto(
+            items.Count,
+            rows.Count(r => r.Visit.QueueStatus == QueueStatus.Waiting),
+            rows.Count(r => r.Visit.QueueStatus == QueueStatus.InConsultation),
+            rows.Count(r => r.Visit.QueueStatus == QueueStatus.Completed),
+            rows.Count(r => r.Visit.QueueStatus == QueueStatus.AdmissionRequested),
+            items.Count(i => i.LabStatus == "AWAITING_RESULTS"),
+            rows.Count(r => r.Visit.RegistrationType is RegistrationType.Emergency or RegistrationType.Icu));
+
+        // Each doctor's status (available / paused with reason) and pace, for "expected time" at the desk.
+        var doctors = await availability.BoardAsync(
+            rows.GroupBy(r => r.Visit.DoctorId).Select(g => (g.Key, g.First().DoctorName)).ToList(), day, ct);
+
+        return new FrontDeskQueueDto(day.ToString("yyyy-MM-dd"), counts, items, doctors);
+    }
+
+    /// <summary>Same rule as the doctor's queue: only after the consultation, tests still pending or all results in.</summary>
+    private static string QueueLabStatus(QueueStatus status, int tests, int pending) =>
+        status is not (QueueStatus.Completed or QueueStatus.AdmissionRequested) || tests == 0 ? ""
+        : pending > 0 ? "AWAITING_RESULTS"
+        : "RESULTS_READY";
+
+    private static int? QueueAge(DateOnly dob, DateOnly on)
+    {
+        if (dob == default || dob > on)
+        {
+            return null;
+        }
+
+        var age = on.Year - dob.Year;
+        return on < dob.AddYears(age) ? age - 1 : age;
+    }
+
+    // ------------------------------------------------------------------ inpatients (front desk)
+
+    // Until discharge exists, "admitted" = IP / ICU visits registered in the last InpatientWindowDays days.
+    private const int InpatientWindowDays = 30;
+
+    // How long a doctor's admission request stays on the list while the desk hasn't admitted the patient.
+    private const int AwaitingAdmissionDays = 3;
+
+    public async Task<InpatientListDto> GetInpatientsAsync(CancellationToken ct)
+    {
+        Require("QUEUE_VIEW");
+        var today = clock.Today;
+        var admittedFrom = today.AddDays(-InpatientWindowDays);
+        var requestedFrom = today.AddDays(-AwaitingAdmissionDays);
+
+        var rows = await db.Visits.AsNoTracking()
+            .Where(v => v.VisitStatus != VisitStatus.Cancelled
+                        && (((v.RegistrationType == RegistrationType.Ip || v.RegistrationType == RegistrationType.Icu)
+                             && v.VisitDate >= admittedFrom)
+                            || (v.QueueStatus == QueueStatus.AdmissionRequested && v.VisitDate >= requestedFrom)))
+            .Select(v => new
+            {
+                Visit = v,
+                v.Patient,
+                DoctorName = v.Doctor.FullName,
+                DepartmentName = v.Department.Name,
+                HasMlc = v.Mlc != null,
+                Advance = db.Receipts
+                    .Where(r => r.VisitId == v.Id && r.Kind == ReceiptKind.Deposit && r.Status == ReceiptStatus.Issued)
+                    .Sum(r => (decimal?)r.Amount) ?? 0,
+                Request = db.Encounters
+                    .Where(e => e.VisitId == v.Id)
+                    .Select(e => new { e.CompletedAt, e.AdmissionType })
+                    .FirstOrDefault(),
+            })
+            .ToListAsync(ct);
+
+        var items = rows
+            .Select(r =>
+            {
+                var admitted = r.Visit.RegistrationType is RegistrationType.Ip or RegistrationType.Icu;
+                var since = admitted
+                    ? r.Visit.ArrivalTime ?? r.Visit.CreatedAt
+                    : r.Request?.CompletedAt ?? r.Visit.CreatedAt;
+                var unit = admitted
+                    ? r.Visit.IcuUnit is { } icu ? EnumText.ToCode(icu) : ""
+                    : r.Request?.AdmissionType is { } type ? EnumText.ToCode(type) : "";
+                return new InpatientItemDto(
+                    r.Visit.Id,
+                    r.Visit.VisitNumber,
+                    r.Visit.TokenNumber,
+                    admitted ? "ADMITTED" : "AWAITING_ADMISSION",
+                    EnumText.ToCode(r.Visit.RegistrationType),
+                    r.Patient.Id,
+                    r.Patient.PatientNumber,
+                    string.Join(' ', new[] { r.Patient.FirstName, r.Patient.MiddleName, r.Patient.LastName }
+                        .Where(s => !string.IsNullOrWhiteSpace(s))),
+                    EnumText.ToCode(r.Patient.Gender),
+                    QueueAge(r.Patient.DateOfBirth, today),
+                    r.Patient.MobileNumber ?? "",
+                    r.DoctorName,
+                    r.DepartmentName,
+                    since,
+                    unit,
+                    r.Visit.BedNumber ?? "",
+                    EnumText.ToCode(r.Visit.PayerType),
+                    r.Visit.AdditionalDetails.Insurance?.InsurerName ?? "",
+                    r.HasMlc,
+                    r.Advance,
+                    null);
+            })
+            // Waiting for a bed first (they need action), then most recently admitted first.
+            .OrderBy(i => i.Status == "ADMITTED")
+            .ThenByDescending(i => i.Since)
+            .ToList();
+
+        var admittedItems = items.Where(i => i.Status == "ADMITTED").ToList();
+        var counts = new InpatientCountsDto(
+            admittedItems.Count,
+            admittedItems.Count(i => i.RegistrationType == "ICU"),
+            admittedItems.Count(i => i.RegistrationType == "IP"),
+            items.Count - admittedItems.Count);
+
+        return new InpatientListDto(counts, items);
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private IQueryable<Visit> VisitQuery() =>
@@ -526,10 +716,16 @@ public sealed partial class RegistrationService(
         return $"MLC-{year}-{seq:0000}";
     }
 
+    /// <summary>
+    /// The front desk may change a visit only while the patient is still WAITING today.
+    /// Once the doctor has started (IN_CONSULTATION) or finished (COMPLETED), or on any later day, it is read-only:
+    /// corrections then go through cancel / Billing, not silent edits.
+    /// (Booking a second visit with the same doctor stays blocked while one is waiting OR in consultation.)
+    /// </summary>
     private static bool IsOpen(Visit v, DateOnly today) =>
         v.VisitDate == today
         && v.VisitStatus == VisitStatus.Registered
-        && v.QueueStatus is QueueStatus.Waiting or QueueStatus.InConsultation;
+        && v.QueueStatus == QueueStatus.Waiting;
 
     private static bool IsAcute(string source) => source is "EMERGENCY" or "ICU";
 
@@ -603,7 +799,48 @@ public sealed partial class RegistrationService(
         if (!string.IsNullOrEmpty(p.Email) && !EmailPattern().IsMatch(p.Email)) e["email"] = "Enter a valid email";
         if (!string.IsNullOrEmpty(p.PostalCode) && !PostalCodePattern().IsMatch(p.PostalCode))
             e["postalCode"] = "Enter a valid 6-digit PIN code";
+        // Same limits as the registration.patients columns, so a long value gets a clear message, not a database error.
+        MaxLength(e, "firstName", p.FirstName, 100);
+        MaxLength(e, "middleName", p.MiddleName, 100);
+        MaxLength(e, "lastName", p.LastName, 100);
+        MaxLength(e, "email", p.Email, 150);
+        MaxLength(e, "addressLine1", p.AddressLine1, 200);
+        MaxLength(e, "addressLine2", p.AddressLine2, 200);
+        MaxLength(e, "city", p.City, 100);
+        MaxLength(e, "state", p.State, 100);
+        MaxLength(e, "emergencyContactName", p.EmergencyContactName, 150);
+        var aadhaarDigits = AadhaarProtector.Normalize(p.AadhaarNumber);
+        if (aadhaarDigits.Length > 0 && !AadhaarProtector.IsValid(aadhaarDigits))
+            e["aadhaarNumber"] = aadhaarDigits.Length < 12 ? "Enter all 12 digits" : "This Aadhaar number is not valid — check the digits";
         return e;
+    }
+
+    private static void MaxLength(Dictionary<string, string> errors, string field, string? value, int max)
+    {
+        if (value is not null && value.Trim().Length > max)
+        {
+            errors.TryAdd(field, $"Keep it within {max} characters (now {value.Trim().Length})");
+        }
+    }
+
+    /// <summary>One person = one patient record: the same Aadhaar can't be registered twice in a hospital.</summary>
+    private async Task CheckAadhaarNotUsedAsync(PatientInputDto input, long? patientId, Dictionary<string, string> errors, CancellationToken ct)
+    {
+        var digits = AadhaarProtector.Normalize(input.AadhaarNumber);
+        if (!AadhaarProtector.IsValid(digits))
+        {
+            return;
+        }
+
+        var hash = aadhaar.Hash(digits);
+        var existing = await db.Patients
+            .Where(p => p.AadhaarHash == hash && p.Id != (patientId ?? 0))
+            .Select(p => p.PatientNumber)
+            .FirstOrDefaultAsync(ct);
+        if (existing is not null)
+        {
+            errors["aadhaarNumber"] = $"This Aadhaar is already registered to patient {existing}. Search for that patient instead.";
+        }
     }
 
     private Dictionary<string, string> ValidatePayer(VisitInputDto v)
@@ -654,7 +891,7 @@ public sealed partial class RegistrationService(
 
     // ------------------------------------------------------------------ mapping
 
-    private static void ApplyPatient(Patient patient, PatientInputDto input)
+    private void ApplyPatient(Patient patient, PatientInputDto input)
     {
         patient.FirstName = input.FirstName.Trim();
         patient.MiddleName = Blank(input.MiddleName);
@@ -672,6 +909,16 @@ public sealed partial class RegistrationService(
         patient.PostalCode = Blank(input.PostalCode);
         patient.EmergencyContactName = Blank(input.EmergencyContactName);
         patient.EmergencyContactPhone = Blank(input.EmergencyContactPhone);
+
+        // Empty = keep what's on file. A new number replaces the old one (validated before we get here).
+        var aadhaarDigits = AadhaarProtector.Normalize(input.AadhaarNumber);
+        if (aadhaarDigits.Length > 0)
+        {
+            var protectedAadhaar = aadhaar.Protect(aadhaarDigits);
+            patient.AadhaarEncrypted = protectedAadhaar.Encrypted;
+            patient.AadhaarHash = protectedAadhaar.Hash;
+            patient.AadhaarLast4 = protectedAadhaar.Last4;
+        }
     }
 
     /// <summary>Payer type + insurance, and Emergency/ICU columns + details (blank for OPD).</summary>
@@ -733,6 +980,7 @@ public sealed partial class RegistrationService(
         EmergencyContactName = p.EmergencyContactName ?? "",
         EmergencyContactPhone = p.EmergencyContactPhone ?? "",
         DobEstimated = p.DobEstimated,
+        AadhaarMasked = AadhaarProtector.Mask(p.AadhaarLast4),
         Status = EnumText.ToCode(p.Status),
         CreatedAt = p.CreatedAt,
         UpdatedAt = p.UpdatedAt ?? p.CreatedAt,

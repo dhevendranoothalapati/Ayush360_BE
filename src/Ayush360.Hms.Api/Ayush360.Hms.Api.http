@@ -1,50 +1,44 @@
-# Run BOTH APIs first. Uses a token from the Identity API.
-@identity = https://localhost:7263
-@hms = https://localhost:7109
+# Run BOTH APIs first. Tokens come from the Identity API's real login (demo password: demo123).
+# HMS checks them with Identity's public key from /.well-known/jwks.json (RS256).
+@identity = http://localhost:5077
+@hms = http://localhost:5041
 
 ### Health - should say Healthy
 GET {{hms}}/health
 
-### Get a DEV token (receptionist "dev", Swetha)
-# @name devToken
-POST {{identity}}/api/dev/token
+### Receptionist DN10110 (Swetha)
+# @name reception
+POST {{identity}}/api/auth/login
 Content-Type: application/json
 
-{}
+{ "username": "DN10110", "password": "demo123" }
 
-### Any valid token -> 200
+### Any valid token -> 200 (proves HMS accepts Identity's RS256 token)
 GET {{hms}}/api/platform-check/whoami
-Authorization: Bearer {{devToken.response.body.accessToken}}
+Authorization: Bearer {{reception.response.body.accessToken}}
 
 ### Front Desk licensed + REGISTRATION_CREATE -> 200
 GET {{hms}}/api/platform-check/front-desk
-Authorization: Bearer {{devToken.response.body.accessToken}}
+Authorization: Bearer {{reception.response.body.accessToken}}
 
 ### Admin-only permission -> 403 for a receptionist
 GET {{hms}}/api/platform-check/all-collections
-Authorization: Bearer {{devToken.response.body.accessToken}}
-
-### Doctor module not licensed in this token -> 403
-GET {{hms}}/api/platform-check/doctor
-Authorization: Bearer {{devToken.response.body.accessToken}}
+Authorization: Bearer {{reception.response.body.accessToken}}
 
 ### No token -> 401
 GET {{hms}}/api/platform-check/whoami
 
-### Get an ADMIN token (all permissions + Doctor module), then retry the 403 calls with it
-# @name adminToken
-POST {{identity}}/api/dev/token
+### Tampered token -> 401 (last characters of the signature changed)
+GET {{hms}}/api/platform-check/whoami
+Authorization: Bearer {{reception.response.body.accessToken}}xyz
+
+### Admin PS10210 (Swetha)
+# @name admin
+POST {{identity}}/api/auth/login
 Content-Type: application/json
 
-{
-  "userId": 3,
-  "userName": "priya",
-  "displayName": "Priya",
-  "roles": ["Admin"],
-  "permissions": ["PATIENT_VIEW","PATIENT_CREATE","PATIENT_EDIT","REGISTRATION_CREATE","PAYMENT_COLLECT","QUEUE_VIEW","COLLECTION_VIEW_ALL"],
-  "modules": ["REGISTRATION","BILLING","DOCTOR","NURSE","PHARMACY","LAB","PAYROLL"]
-}
+{ "username": "PS10210", "password": "demo123" }
 
 ### Admin -> 200
 GET {{hms}}/api/platform-check/all-collections
-Authorization: Bearer {{adminToken.response.body.accessToken}}
+Authorization: Bearer {{admin.response.body.accessToken}}

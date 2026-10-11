@@ -6,6 +6,7 @@ using Ayush360.Identity.Api.Onboarding;
 using Ayush360.Identity.Api.Security;
 using Ayush360.Platform;
 using Ayush360.Platform.Data;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -31,6 +32,11 @@ builder.Services.AddDbContext<CoreDbContext>((services, options) => options
 
 // Sign-in
 builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
+// RS256: this API holds the private key and signs tokens; it checks its own tokens with the public keys directly.
+// Other APIs download the public keys from /.well-known/jwks.json (WellKnownController).
+builder.Services.AddSingleton<SigningKeys>();
+builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+    .Configure<SigningKeys>((options, keys) => options.TokenValidationParameters.IssuerSigningKeys = keys.ValidationKeys);
 builder.Services.AddSingleton<TokenService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<TenantOnboardingService>();

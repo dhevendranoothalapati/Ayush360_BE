@@ -67,8 +67,9 @@ public static class Catalog
         ("ADMIN", "Administrator", Permissions.Select(p => p.Code).ToArray()),
         ("RECEPTIONIST", "Receptionist",
             new[] { "PATIENT_VIEW", "PATIENT_CREATE", "PATIENT_EDIT", "REGISTRATION_CREATE", "PAYMENT_COLLECT", "QUEUE_VIEW", "BILLING_VIEW" }),
+        // Doctors work in the Doctor module only: no front desk queue, no laboratory worklist.
         ("DOCTOR", "Doctor",
-            new[] { "PATIENT_VIEW", "QUEUE_VIEW", "ENCOUNTER_VIEW", "ENCOUNTER_EDIT", "PRESCRIPTION_CREATE", "LAB_ORDER_VIEW" }),
+            new[] { "PATIENT_VIEW", "ENCOUNTER_VIEW", "ENCOUNTER_EDIT", "PRESCRIPTION_CREATE" }),
     ];
 
     private static Permission P(string code, string module, string name, int sortOrder) =>

@@ -1,11 +1,15 @@
-using System.Text;
-using Microsoft.IdentityModel.Tokens;
-
 namespace Ayush360.Platform.Security;
 
 /// <summary>
-/// "Jwt" configuration section. Issuer/Audience live in appsettings.json;
-/// SigningKey is a secret (dotnet user-secrets locally, Key Vault on Azure). Never commit it.
+/// "Jwt" configuration section.
+///
+/// Access tokens are signed with RS256 (RSA, asymmetric):
+///   - The Identity API holds the PRIVATE key and is the only service that can create tokens.
+///   - Every other API (HMS, later Billing, Pharmacy, ...) only has the PUBLIC key, which it downloads from
+///     Identity's /.well-known/jwks.json. A module API can check a token but can never mint one.
+///
+/// Issuer / Audience / lifetimes live in appsettings.json.
+/// SigningKeyPem is a secret: Key Vault on Azure; generated automatically on your PC in Development. Never commit it.
 /// </summary>
 public sealed class JwtOptions
 {
@@ -13,21 +17,38 @@ public sealed class JwtOptions
 
     public string Issuer { get; set; } = string.Empty;
     public string Audience { get; set; } = string.Empty;
-    public string SigningKey { get; set; } = string.Empty;
     public int AccessTokenMinutes { get; set; } = 30;
 
-    /// <summary>How long a refresh token keeps the user signed in without typing the password again.</summary>
-    public int RefreshTokenDays { get; set; } = 7;
+    /// <summary>
+    /// Longest a sign-in can last (one shift). While the user works, the app quietly renews the short access token,
+    /// but never past this many hours after the password was typed; then they must sign in again.
+    /// Renewing does NOT extend it.
+    /// </summary>
+    public int SessionHours { get; set; } = 12;
 
-    public SymmetricSecurityKey GetSigningKey()
-    {
-        if (string.IsNullOrWhiteSpace(SigningKey) || SigningKey.Length < 32)
-        {
-            throw new InvalidOperationException(
-                "Jwt:SigningKey is missing or shorter than 32 characters. " +
-                "Set the same key for every API with: dotnet user-secrets set \"Jwt:SigningKey\" <key>");
-        }
+    // ---- APIs that only VALIDATE tokens (HMS and future module APIs) ----
 
-        return new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SigningKey));
-    }
+    /// <summary>
+    /// Where to download Identity's public keys, e.g. http://localhost:5077/.well-known/jwks.json in development,
+    /// or the Identity API's internal https address on Azure (env var Jwt__JwksUrl).
+    /// Leave empty in the Identity API itself: it uses its own keys directly.
+    /// </summary>
+    public string JwksUrl { get; set; } = string.Empty;
+
+    /// <summary>Must be true outside development so keys are only ever fetched over https.</summary>
+    public bool RequireHttpsMetadata { get; set; } = true;
+
+    // ---- Identity API only ----
+
+    /// <summary>
+    /// The active RSA private key (PKCS#8 PEM, "-----BEGIN PRIVATE KEY-----", 2048 bits or more).
+    /// Azure: Key Vault secret "Jwt--SigningKeyPem". Development: leave empty and a key is generated on first run.
+    /// </summary>
+    public string SigningKeyPem { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Key rotation: PUBLIC keys of previous signing keys ("-----BEGIN PUBLIC KEY-----"). They are still published in
+    /// jwks.json so tokens signed before the rotation keep working until they expire. Remove after AccessTokenMinutes.
+    /// </summary>
+    public string[] PreviousPublicKeysPem { get; set; } = [];
 }

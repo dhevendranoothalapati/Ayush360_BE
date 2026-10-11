@@ -1,3 +1,4 @@
+using System.Data.Common;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -30,6 +31,11 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
             case BadHttpRequestException bad:
                 status = bad.StatusCode;
                 message = "The request was not valid.";
+                break;
+            case Exception when exception.InnerException is DbException { SqlState: "22001" }:
+                // PostgreSQL "value too long for type character varying(n)": a field without its own length check.
+                status = StatusCodes.Status400BadRequest;
+                message = "One of the entries is too long. Please shorten it and try again.";
                 break;
             case OperationCanceledException when httpContext.RequestAborted.IsCancellationRequested:
                 // Client went away; nothing to send.

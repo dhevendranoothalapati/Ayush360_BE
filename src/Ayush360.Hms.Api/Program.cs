@@ -1,3 +1,4 @@
+using Ayush360.Hms.Api.Consultations;
 using Ayush360.Hms.Api.Health;
 using Ayush360.Hms.Api.Registration;
 using Ayush360.Hms.Api.Data;
@@ -27,14 +28,24 @@ builder.Services.AddDbContext<HospitalDbContext>((services, options) => options
 
 // Front Desk
 builder.Services.AddSingleton<HospitalClock>();
+// Aadhaar: encrypted at rest, masked on screen. Keys: Key Vault on Azure, generated per PC in Development.
+builder.Services.AddOptions<AadhaarOptions>().Bind(builder.Configuration.GetSection(AadhaarOptions.SectionName));
+builder.Services.AddSingleton<AadhaarProtector>();
 builder.Services.AddScoped<NumberSequenceService>();
 builder.Services.AddScoped<RegistrationService>();
+
+// Doctor module
+builder.Services.AddScoped<ConsultationService>();
+builder.Services.AddScoped<DoctorAvailabilityService>();
 
 // Empty strings from the browser ("not filled in") must reach our own validation, not fail as "required".
 builder.Services.AddControllers(options => options.SuppressImplicitRequiredAttributeForNonNullableReferenceTypes = true);
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
+
+// Fail at startup (not at the first registration) if the Aadhaar keys are missing or invalid.
+app.Services.GetRequiredService<AadhaarProtector>();
 
 app.UseAyushPlatform();
 

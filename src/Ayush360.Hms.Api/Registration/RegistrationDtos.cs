@@ -34,6 +34,9 @@ public sealed class PatientInputDto
     public string EmergencyContactName { get; set; } = "";
     public string EmergencyContactPhone { get; set; } = "";
     public bool DobEstimated { get; set; }
+
+    /// <summary>12 digits (spaces allowed). Empty = keep the Aadhaar already on file.</summary>
+    public string AadhaarNumber { get; set; } = "";
 }
 
 /// <summary>Visit details typed at the desk (types.ts → VisitInput: visit + payer + Emergency/ICU fields).</summary>
@@ -116,6 +119,10 @@ public sealed class PatientDto
     public string EmergencyContactName { get; init; } = "";
     public string EmergencyContactPhone { get; init; } = "";
     public bool DobEstimated { get; init; }
+
+    /// <summary>"XXXX XXXX 1234" or "". The full Aadhaar is never sent to the browser.</summary>
+    public string AadhaarMasked { get; init; } = "";
+
     public string Status { get; init; } = "ACTIVE";
     public DateTimeOffset CreatedAt { get; init; }
     public DateTimeOffset UpdatedAt { get; init; }
@@ -234,3 +241,75 @@ public sealed class FlexibleLongConverter : JsonConverter<long?>
         }
     }
 }
+
+// ---------------------------------------------------------------- patient queue (GET /api/registration/queue)
+// React: src/modules/registration/types.ts → FrontDeskQueue. No clinical details.
+
+public sealed record FrontDeskQueueDto(
+    string Date,
+    FrontDeskQueueCountsDto Counts,
+    IReadOnlyList<FrontDeskQueueItemDto> Items,
+    IReadOnlyList<Consultations.FrontDeskDoctorDto> Doctors); // status + pace of each doctor in the list
+
+public sealed record FrontDeskQueueCountsDto(
+    int Total, int Waiting, int InConsultation, int Completed, int AdmissionRequested, int AwaitingLabResults, int Emergency);
+
+public sealed record FrontDeskQueueItemDto(
+    long VisitId,
+    string TokenNumber,
+    string VisitNumber,
+    string RegistrationType, // OP, IP, EMERGENCY, ICU
+    long PatientId,
+    string PatientNumber,
+    string PatientName,
+    string Gender,
+    int? AgeYears,
+    string MobileNumber,
+    long DoctorId,
+    string DoctorName,
+    string DepartmentName,
+    string ReasonForVisit,
+    DateTimeOffset RegisteredAt,
+    string QueueStatus, // WAITING, IN_CONSULTATION, COMPLETED, ADMISSION_REQUESTED, CONVERTED_TO_INPATIENT
+    string TriageLevel, // RED, ORANGE, YELLOW, GREEN or ""
+    bool IsFollowUp,
+    bool IsReturning,
+    string PaymentStatus, // PAID, UNPAID
+    decimal ConsultationFee,
+    string PayerType,
+    DateTimeOffset? StartedAt, // doctor started the consultation
+    DateTimeOffset? CompletedAt,
+    string LabStatus, // "", AWAITING_RESULTS, RESULTS_READY
+    string FollowUpDate, // review date the doctor set (yyyy-MM-dd) or "": the desk can book it
+    string AdmissionType); // WARD, ICU, HDU, DAY_CARE when the doctor requested admission, else ""
+
+// ---------------------------------------------------------------- inpatients (GET /api/registration/inpatients)
+// Everyone currently admitted (any admission date) + patients the doctor asked to admit.
+// Wards / rooms / beds and itemised billing are not built yet: bed = what the desk typed, AmountPending = null for now.
+
+public sealed record InpatientListDto(InpatientCountsDto Counts, IReadOnlyList<InpatientItemDto> Items);
+
+public sealed record InpatientCountsDto(int Admitted, int Icu, int Ward, int AwaitingAdmission);
+
+public sealed record InpatientItemDto(
+    long VisitId,
+    string VisitNumber,
+    string TokenNumber,
+    string Status, // ADMITTED, AWAITING_ADMISSION
+    string RegistrationType, // IP, ICU (admitted) or OP (doctor requested admission)
+    long PatientId,
+    string PatientNumber,
+    string PatientName,
+    string Gender,
+    int? AgeYears,
+    string MobileNumber,
+    string DoctorName,
+    string DepartmentName,
+    DateTimeOffset Since, // admitted at, or when the doctor requested admission
+    string Unit, // ICU unit (MICU, SICU, ...) or requested admission type (WARD, ICU, HDU, DAY_CARE), or ""
+    string BedNumber, // as typed at the desk until the bed board exists
+    string PayerType,
+    string InsurerName,
+    bool IsMlc,
+    decimal AdvancePaid, // deposits collected so far
+    decimal? AmountPending); // null until billing exists

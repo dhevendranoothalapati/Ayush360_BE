@@ -184,6 +184,270 @@ namespace Ayush360.Hms.Api.Data.Migrations
                     b.ToTable("doctors", "hospital");
                 });
 
+            modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.DoctorBreak", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long?>("CreatedBy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("created_by");
+
+                    b.Property<long>("DoctorId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("doctor_id");
+
+                    b.Property<DateTimeOffset?>("EndedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("ended_at");
+
+                    b.Property<DateTimeOffset?>("ExpectedBackAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expected_back_at");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("note");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("reason");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<long>("TenantId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<long?>("UpdatedBy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_doctor_breaks");
+
+                    b.HasIndex("TenantId", "DoctorId", "StartedAt")
+                        .HasDatabaseName("ix_doctor_breaks_tenant_id_doctor_id_started_at");
+
+                    b.ToTable("doctor_breaks", "doctor");
+                });
+
+            modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.Encounter", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("AdmissionReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("admission_reason");
+
+                    b.Property<bool>("AdmissionRequested")
+                        .HasColumnType("boolean")
+                        .HasColumnName("admission_requested");
+
+                    b.Property<string>("AdmissionType")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("admission_type");
+
+                    b.Property<string>("Advice")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("advice");
+
+                    b.Property<string>("Allergies")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("allergies");
+
+                    b.Property<string>("ChiefComplaints")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("chief_complaints");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long?>("CreatedBy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("created_by");
+
+                    b.Property<long>("DoctorId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("doctor_id");
+
+                    b.Property<string>("Examination")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("examination");
+
+                    b.Property<DateOnly?>("FollowUpDate")
+                        .HasColumnType("date")
+                        .HasColumnName("follow_up_date");
+
+                    b.Property<string>("History")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("history");
+
+                    b.Property<DateTimeOffset?>("LastEditedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_edited_at");
+
+                    b.Property<string>("LastEditedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("last_edited_by");
+
+                    b.Property<string>("PastHistory")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("past_history");
+
+                    b.Property<long>("PatientId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("patient_id");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.Property<long>("TenantId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<long?>("UpdatedBy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("updated_by");
+
+                    b.Property<long>("VisitId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("visit_id");
+
+                    b.Property<string>("Vitals")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("vitals");
+
+                    b.HasKey("Id")
+                        .HasName("pk_encounters");
+
+                    b.HasIndex("DoctorId")
+                        .HasDatabaseName("ix_encounters_doctor_id");
+
+                    b.HasIndex("VisitId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_encounters_visit_id");
+
+                    b.HasIndex("TenantId", "DoctorId", "StartedAt")
+                        .HasDatabaseName("ix_encounters_tenant_id_doctor_id_started_at");
+
+                    b.HasIndex("TenantId", "PatientId", "StartedAt")
+                        .HasDatabaseName("ix_encounters_tenant_id_patient_id_started_at");
+
+                    b.ToTable("encounters", "doctor");
+                });
+
+            modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.EncounterDiagnosis", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long?>("CreatedBy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("description");
+
+                    b.Property<long>("EncounterId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("encounter_id");
+
+                    b.Property<string>("Icd10Code")
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasColumnName("icd10_code");
+
+                    b.Property<bool>("IsPrimary")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_primary");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<long>("TenantId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<long?>("UpdatedBy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_encounter_diagnoses");
+
+                    b.HasIndex("EncounterId")
+                        .HasDatabaseName("ix_encounter_diagnoses_encounter_id");
+
+                    b.HasIndex("TenantId", "Icd10Code")
+                        .HasDatabaseName("ix_encounter_diagnoses_tenant_id_icd10_code");
+
+                    b.ToTable("encounter_diagnoses", "doctor");
+                });
+
             modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.HospitalSetting", b =>
                 {
                     b.Property<long>("Id")
@@ -233,6 +497,164 @@ namespace Ayush360.Hms.Api.Data.Migrations
                         {
                             t.HasCheckConstraint("ck_settings_follow_up_free_days", "follow_up_free_days BETWEEN 0 AND 90");
                         });
+                });
+
+            modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.LabOrder", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long?>("CreatedBy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("created_by");
+
+                    b.Property<long>("EncounterId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("encounter_id");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("notes");
+
+                    b.Property<long>("PatientId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("patient_id");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.Property<long>("TenantId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("TestCode")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("test_code");
+
+                    b.Property<string>("TestName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("test_name");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<long?>("UpdatedBy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("updated_by");
+
+                    b.Property<long>("VisitId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("visit_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_lab_orders");
+
+                    b.HasIndex("EncounterId")
+                        .HasDatabaseName("ix_lab_orders_encounter_id");
+
+                    b.HasIndex("TenantId", "VisitId")
+                        .HasDatabaseName("ix_lab_orders_tenant_id_visit_id");
+
+                    b.HasIndex("TenantId", "Status", "CreatedAt")
+                        .HasDatabaseName("ix_lab_orders_tenant_id_status_created_at");
+
+                    b.ToTable("lab_orders", "doctor");
+                });
+
+            modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.Medicine", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long?>("CreatedBy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("DefaultDose")
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)")
+                        .HasColumnName("default_dose");
+
+                    b.Property<string>("DefaultFrequency")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("default_frequency");
+
+                    b.Property<string>("Form")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("form");
+
+                    b.Property<string>("GenericName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("generic_name");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Strength")
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)")
+                        .HasColumnName("strength");
+
+                    b.Property<long>("TenantId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<long?>("UpdatedBy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_medicines");
+
+                    b.HasIndex("TenantId", "Name", "Strength", "Form")
+                        .IsUnique()
+                        .HasDatabaseName("ix_medicines_tenant_id_name_strength_form");
+
+                    b.ToTable("medicines", "hospital");
                 });
 
             modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.MlcRecord", b =>
@@ -337,6 +759,21 @@ namespace Ayush360.Hms.Api.Data.Migrations
                         .HasColumnName("id");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("AadhaarEncrypted")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("aadhaar_encrypted");
+
+                    b.Property<string>("AadhaarHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("aadhaar_hash");
+
+                    b.Property<string>("AadhaarLast4")
+                        .HasMaxLength(4)
+                        .HasColumnType("character varying(4)")
+                        .HasColumnName("aadhaar_last4");
 
                     b.Property<string>("AdditionalDetails")
                         .IsRequired()
@@ -462,6 +899,9 @@ namespace Ayush360.Hms.Api.Data.Migrations
                     b.HasKey("Id")
                         .HasName("pk_patients");
 
+                    b.HasIndex("TenantId", "AadhaarHash")
+                        .HasDatabaseName("ix_patients_tenant_id_aadhaar_hash");
+
                     b.HasIndex("TenantId", "MobileNumber")
                         .HasDatabaseName("ix_patients_tenant_id_mobile_number");
 
@@ -473,6 +913,100 @@ namespace Ayush360.Hms.Api.Data.Migrations
                         .HasDatabaseName("ix_patients_tenant_id_first_name_last_name");
 
                     b.ToTable("patients", "registration");
+                });
+
+            modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.PrescriptionItem", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long?>("CreatedBy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Dose")
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)")
+                        .HasColumnName("dose");
+
+                    b.Property<int?>("DurationDays")
+                        .HasColumnType("integer")
+                        .HasColumnName("duration_days");
+
+                    b.Property<long>("EncounterId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("encounter_id");
+
+                    b.Property<string>("Form")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("form");
+
+                    b.Property<string>("Frequency")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("frequency");
+
+                    b.Property<string>("Instructions")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("instructions");
+
+                    b.Property<long?>("MedicineId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("medicine_id");
+
+                    b.Property<string>("MedicineName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("medicine_name");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<string>("Strength")
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)")
+                        .HasColumnName("strength");
+
+                    b.Property<long>("TenantId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("Timing")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("timing");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<long?>("UpdatedBy")
+                        .HasColumnType("bigint")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_prescription_items");
+
+                    b.HasIndex("EncounterId")
+                        .HasDatabaseName("ix_prescription_items_encounter_id");
+
+                    b.ToTable("prescription_items", "doctor", t =>
+                        {
+                            t.HasCheckConstraint("ck_prescription_items_duration_days", "duration_days IS NULL OR duration_days BETWEEN 1 AND 365");
+                        });
                 });
 
             modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.Receipt", b =>
@@ -766,6 +1300,51 @@ namespace Ayush360.Hms.Api.Data.Migrations
                     b.Navigation("Department");
                 });
 
+            modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.Encounter", b =>
+                {
+                    b.HasOne("Ayush360.Hms.Api.Data.Entities.Doctor", "Doctor")
+                        .WithMany()
+                        .HasForeignKey("DoctorId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_encounters_doctors_doctor_id");
+
+                    b.HasOne("Ayush360.Hms.Api.Data.Entities.Visit", "Visit")
+                        .WithMany()
+                        .HasForeignKey("VisitId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_encounters_visits_visit_id");
+
+                    b.Navigation("Doctor");
+
+                    b.Navigation("Visit");
+                });
+
+            modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.EncounterDiagnosis", b =>
+                {
+                    b.HasOne("Ayush360.Hms.Api.Data.Entities.Encounter", "Encounter")
+                        .WithMany("Diagnoses")
+                        .HasForeignKey("EncounterId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_encounter_diagnoses_encounters_encounter_id");
+
+                    b.Navigation("Encounter");
+                });
+
+            modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.LabOrder", b =>
+                {
+                    b.HasOne("Ayush360.Hms.Api.Data.Entities.Encounter", "Encounter")
+                        .WithMany("LabOrders")
+                        .HasForeignKey("EncounterId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_lab_orders_encounters_encounter_id");
+
+                    b.Navigation("Encounter");
+                });
+
             modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.MlcRecord", b =>
                 {
                     b.HasOne("Ayush360.Hms.Api.Data.Entities.Visit", "Visit")
@@ -776,6 +1355,18 @@ namespace Ayush360.Hms.Api.Data.Migrations
                         .HasConstraintName("fk_mlc_register_visits_visit_id");
 
                     b.Navigation("Visit");
+                });
+
+            modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.PrescriptionItem", b =>
+                {
+                    b.HasOne("Ayush360.Hms.Api.Data.Entities.Encounter", "Encounter")
+                        .WithMany("Prescriptions")
+                        .HasForeignKey("EncounterId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_prescription_items_encounters_encounter_id");
+
+                    b.Navigation("Encounter");
                 });
 
             modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.Receipt", b =>
@@ -831,6 +1422,15 @@ namespace Ayush360.Hms.Api.Data.Migrations
             modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.Department", b =>
                 {
                     b.Navigation("Doctors");
+                });
+
+            modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.Encounter", b =>
+                {
+                    b.Navigation("Diagnoses");
+
+                    b.Navigation("LabOrders");
+
+                    b.Navigation("Prescriptions");
                 });
 
             modelBuilder.Entity("Ayush360.Hms.Api.Data.Entities.Patient", b =>

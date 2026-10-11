@@ -112,7 +112,7 @@ public sealed class AuthService(
         user.LockedUntil = null;
         user.LastLoginAt = now;
 
-        var (refreshToken, refreshEntity) = NewRefreshToken(user, ipAddress, now);
+        var (refreshToken, refreshEntity) = NewRefreshToken(user, ipAddress, now.AddHours(jwtOptions.Value.SessionHours));
         db.RefreshTokens.Add(refreshEntity);
         await db.SaveChangesAsync(ct);
 
@@ -164,7 +164,8 @@ public sealed class AuthService(
         EnsureCanSignIn(user);
 
         // Rotate: the old token stops working, a new one replaces it.
-        var (newToken, newEntity) = NewRefreshToken(user, ipAddress, now);
+        // Same end time as the token it replaces: renewing keeps the user signed in, but never beyond SessionHours.
+        var (newToken, newEntity) = NewRefreshToken(user, ipAddress, stored.ExpiresAt);
         db.RefreshTokens.Add(newEntity);
         await db.SaveChangesAsync(ct);
 
@@ -284,7 +285,7 @@ public sealed class AuthService(
         return (subject, dto);
     }
 
-    private (string Token, RefreshToken Entity) NewRefreshToken(User user, string? ipAddress, DateTimeOffset now)
+    private (string Token, RefreshToken Entity) NewRefreshToken(User user, string? ipAddress, DateTimeOffset expiresAt)
     {
         var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(48))
             .Replace('+', '-').Replace('/', '_').TrimEnd('=');
@@ -293,7 +294,7 @@ public sealed class AuthService(
             TenantId = user.TenantId,
             UserId = user.Id,
             TokenHash = Hash(token),
-            ExpiresAt = now.AddDays(jwtOptions.Value.RefreshTokenDays),
+            ExpiresAt = expiresAt,
             CreatedByIp = ipAddress,
             CreatedBy = user.Id,
         };

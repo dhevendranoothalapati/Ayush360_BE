@@ -19,11 +19,17 @@ cd C:\Ayush360\Backend
 # Same database for both APIs
 dotnet user-secrets set "ConnectionStrings:Default" "Host=localhost;Port=5432;Database=ayush360;Username=ayush360_app;Password=<password>" --project src\Ayush360.Identity.Api
 dotnet user-secrets set "ConnectionStrings:Default" "Host=localhost;Port=5432;Database=ayush360;Username=ayush360_app;Password=<password>" --project src\Ayush360.Hms.Api
-# Same JWT signing key for both APIs (Identity signs, HMS validates)
-$key = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
-dotnet user-secrets set "Jwt:SigningKey" $key --project src\Ayush360.Identity.Api
-dotnet user-secrets set "Jwt:SigningKey" $key --project src\Ayush360.Hms.Api
 ```
+
+### Access tokens (RS256)
+
+- The **Identity API** signs tokens with an RSA **private** key. In Development it is created automatically on
+  first run at `%LOCALAPPDATA%\Ayush360\identity-dev-signing-key.pem` (outside the repo). On Azure it comes from
+  Key Vault secret `Jwt--SigningKeyPem`.
+- Other APIs (HMS, ...) only get the **public** key, from `GET /.well-known/jwks.json` on the Identity API
+  (`Jwt:JwksUrl`; Development: `http://localhost:5077/.well-known/jwks.json`). They can check tokens but never create them.
+- Key rotation: put the new private key in `Jwt:SigningKeyPem`, move the old key's PUBLIC key into
+  `Jwt:PreviousPublicKeysPem` for one token lifetime (30 min), then remove it. Module APIs pick up new keys automatically.
 
 ## Run
 
@@ -49,7 +55,6 @@ Test with the `.http` files in each API folder (VS Code "REST Client" extension)
 ## Status
 
 - [x] Solution, Platform library, Identity + HMS API shells, health checks
-- [x] Dev-only token endpoint (`POST /api/dev/token`) to test auth before the users tables exist
 - [ ] `core` tables + real login / refresh / `/api/auth/me`
 - [ ] `registration` tables + the 13 Front Desk endpoints the React app uses
 - [ ] Row-level security per tenant, audit log, Application Insights exporter

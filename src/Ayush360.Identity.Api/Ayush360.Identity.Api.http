@@ -32,3 +32,6 @@ POST {{identity}}/api/auth/login
 Content-Type: application/json
 
 { "username": "PS10210", "password": "demo123" }
+
+### Public keys other APIs use to check tokens (RS256). Shows "kty": "RSA" and a "kid"; never a private key.
+GET {{identity}}/.well-known/jwks.json

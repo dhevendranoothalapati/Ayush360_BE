@@ -17,8 +17,11 @@ public sealed record TokenSubject(
     IReadOnlyCollection<string> Permissions,
     IReadOnlyCollection<string> Modules);
 
-/// <summary>Issues short-lived access tokens. Only the Identity API signs tokens; other APIs only validate.</summary>
-public sealed class TokenService(IOptions<JwtOptions> options)
+/// <summary>
+/// Issues short-lived RS256 access tokens. Only the Identity API holds the private key and signs tokens;
+/// other APIs validate with the public key from /.well-known/jwks.json.
+/// </summary>
+public sealed class TokenService(IOptions<JwtOptions> options, SigningKeys keys)
 {
     private readonly JsonWebTokenHandler _handler = new();
 
@@ -49,7 +52,7 @@ public sealed class TokenService(IOptions<JwtOptions> options)
             IssuedAt = now,
             NotBefore = now,
             Expires = expires,
-            SigningCredentials = new SigningCredentials(jwt.GetSigningKey(), SecurityAlgorithms.HmacSha256),
+            SigningCredentials = keys.SigningCredentials,
         };
 
         return (_handler.CreateToken(descriptor), expires);

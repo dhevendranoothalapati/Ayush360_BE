@@ -1,3 +1,4 @@
+using Ayush360.Hms.Api.Consultations;
 using Ayush360.Hms.Api.Data.Entities;
 using Ayush360.Platform.Data;
 using Ayush360.Platform.Demo;
@@ -58,6 +59,25 @@ public static class DemoDataSeeder
                         db.Departments.Add(new Department
                         {
                             TenantId = tenantId, Code = code, Name = name, SortOrder = sortOrder, Status = RecordStatus.Active,
+                        });
+                    }
+                }
+
+                // Medicine list doctors prescribe from (starter list; the hospital maintains it later).
+                if (!await db.Medicines.IgnoreQueryFilters().AnyAsync(m => m.TenantId == tenantId, ct))
+                {
+                    foreach (var m in ClinicalCatalogs.StarterMedicines)
+                    {
+                        db.Medicines.Add(new Medicine
+                        {
+                            TenantId = tenantId,
+                            Name = m.Name,
+                            GenericName = m.GenericName,
+                            Strength = m.Strength,
+                            Form = m.Form,
+                            DefaultDose = m.DefaultDose,
+                            DefaultFrequency = m.DefaultFrequency,
+                            Status = RecordStatus.Active,
                         });
                     }
                 }

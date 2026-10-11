@@ -25,12 +25,16 @@ internal sealed class PatientConfiguration : IEntityTypeConfiguration<Patient>
         b.Property(x => x.PostalCode).HasMaxLength(10);
         b.Property(x => x.EmergencyContactName).HasMaxLength(150);
         b.Property(x => x.EmergencyContactPhone).HasMaxLength(15);
+        b.Property(x => x.AadhaarEncrypted).HasMaxLength(100);
+        b.Property(x => x.AadhaarHash).HasMaxLength(64);
+        b.Property(x => x.AadhaarLast4).HasMaxLength(4);
         b.Property(x => x.Status).HasEnumAsText();
         b.Property(x => x.AdditionalDetails).HasJsonColumn();
 
         b.HasIndex(x => new { x.TenantId, x.PatientNumber }).IsUnique();
         b.HasIndex(x => new { x.TenantId, x.MobileNumber });            // search by mobile
         b.HasIndex(x => new { x.TenantId, x.FirstName, x.LastName });   // search by name
+        b.HasIndex(x => new { x.TenantId, x.AadhaarHash });             // search by Aadhaar + duplicate check
     }
 }
 

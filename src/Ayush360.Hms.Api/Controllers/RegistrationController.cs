@@ -48,6 +48,16 @@ public sealed class RegistrationController(RegistrationService registration) : C
     public async Task<ActionResult<RegistrationDto>> UpdateVisit(long id, [FromBody] VisitInputDto visit, CancellationToken ct) =>
         Ok(await registration.UpdateVisitAsync(id, visit, ct));
 
+    /// <summary>Patient queue: everyone registered for a day (all doctors) with their latest status. No clinical details.</summary>
+    [HttpGet("queue")]
+    public async Task<ActionResult<FrontDeskQueueDto>> Queue([FromQuery] string? date, CancellationToken ct) =>
+        Ok(await registration.GetQueueAsync(date, ct));
+
+    /// <summary>Patients currently admitted (any admission date) and those the doctor asked to admit.</summary>
+    [HttpGet("inpatients")]
+    public async Task<ActionResult<InpatientListDto>> Inpatients(CancellationToken ct) =>
+        Ok(await registration.GetInpatientsAsync(ct));
+
     /// <summary>Today's counters for the front desk header (my collection; hospital total for admins).</summary>
     [HttpGet("registrations/summary")]
     public async Task<ActionResult<TodaySummaryDto>> Summary(CancellationToken ct) =>

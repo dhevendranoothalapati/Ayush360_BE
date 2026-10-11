@@ -80,6 +80,17 @@ public sealed class Patient : AuditableEntity, ITenantOwned
     /// <summary>Emergency contact's phone. Optional.</summary>
     public string? EmergencyContactPhone { get; set; }
 
+    // Aadhaar (optional). The plain number is never stored: see Registration/AadhaarProtector.cs.
+
+    /// <summary>Full Aadhaar, AES-256-GCM encrypted ("v1.…"). Only for future ABHA / insurance use.</summary>
+    public string? AadhaarEncrypted { get; set; }
+
+    /// <summary>HMAC-SHA256 fingerprint of the number: search by Aadhaar and catch duplicate patients.</summary>
+    public string? AadhaarHash { get; set; }
+
+    /// <summary>Last 4 digits, for the masked display "XXXX XXXX 1234".</summary>
+    public string? AadhaarLast4 { get; set; }
+
     /// <summary>ACTIVE = normal; INACTIVE = merged into another record or marked as a duplicate.</summary>
     public RecordStatus Status { get; set; } = RecordStatus.Active;
 
