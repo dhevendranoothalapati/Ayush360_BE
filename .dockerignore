@@ -1,0 +1,15 @@
+# Keep the build context small and free of secrets / local build output.
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+**/*.user
+**/*.pem
+**/secrets.json
+**/appsettings.*.local.json
+.git/
+.gitignore
+postman/
+docs/
+deploy/docker-compose.yml
+deploy/.env

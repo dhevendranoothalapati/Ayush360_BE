@@ -52,7 +52,12 @@ app.UseAyushPlatform();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi().AllowAnonymous();
+}
 
+// Demo data: always on a developer PC; on a test environment in Azure only when DemoData__Enabled=true.
+// Never set it in production (it creates demo hospitals and users with a known password).
+if (app.Environment.IsDevelopment() || app.Configuration.GetValue<bool>("DemoData:Enabled"))
+{
     // Demo hospitals: settings, departments, doctor profiles (waits for the Identity API's demo users).
     await DemoDataSeeder.SeedAsync(app.Services);
 }

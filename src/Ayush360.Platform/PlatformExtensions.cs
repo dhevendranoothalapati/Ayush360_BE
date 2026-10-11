@@ -3,6 +3,7 @@ using Ayush360.Platform.Observability;
 using Ayush360.Platform.Security;
 using Ayush360.Platform.Tenancy;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -57,6 +58,16 @@ public static class PlatformExtensions
             .WithExposedHeaders(CorrelationIdMiddleware.HeaderName)));
 
         builder.Services.AddHealthChecks();
+
+        // Behind proxies (Nginx in the web container, Azure ingress) the client IP arrives in X-Forwarded-For.
+        // Turned on with ASPNETCORE_FORWARDEDHEADERS_ENABLED=true (set in the Docker image). Each proxy hop adds
+        // one entry: ForwardedHeaders:ForwardLimit = number of proxies between the browser-facing Nginx and this API
+        // (1 = Docker Compose, 2 = Azure Container Apps internal ingress). Default 1.
+        var forwardLimit = builder.Configuration.GetValue<int?>("ForwardedHeaders:ForwardLimit");
+        if (forwardLimit is > 0)
+        {
+            builder.Services.Configure<ForwardedHeadersOptions>(options => options.ForwardLimit = forwardLimit);
+        }
 
         return builder;
     }

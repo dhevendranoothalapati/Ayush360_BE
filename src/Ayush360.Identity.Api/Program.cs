@@ -53,7 +53,12 @@ app.UseRateLimiter();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi().AllowAnonymous();
+}
 
+// Demo data: always on a developer PC; on a test environment in Azure only when DemoData__Enabled=true.
+// Never set it in production (it creates demo hospitals and users with a known password).
+if (app.Environment.IsDevelopment() || app.Configuration.GetValue<bool>("DemoData:Enabled"))
+{
     // Demo hospitals (Swetha 10, Green Valley 20) and their users. Skips anything that already exists.
     await DemoDataSeeder.SeedAsync(app.Services);
 }
