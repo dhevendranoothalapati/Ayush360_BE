@@ -695,7 +695,9 @@ public sealed partial class RegistrationService(
                 r.DoctorName,
                 r.DepartmentName,
                 r.Visit.ReasonForVisit ?? "",
-                r.Visit.AdditionalDetails.CheckedInAt ?? r.Visit.AdditionalDetails.RescheduledAt ?? r.Visit.CreatedAt,
+                // Lab review: the times of the review round (back in line → with doctor → done), not the first visit.
+                IsLabReview(r.Visit) ? r.Visit.AdditionalDetails.ReviewReturnedAt ?? r.Visit.CreatedAt
+                    : r.Visit.AdditionalDetails.CheckedInAt ?? r.Visit.AdditionalDetails.RescheduledAt ?? r.Visit.CreatedAt,
                 EnumText.ToCode(r.Visit.QueueStatus),
                 r.Visit.TriageLevel is { } triage ? EnumText.ToCode(triage) : "",
                 r.Visit.IsFollowUp,
@@ -703,14 +705,18 @@ public sealed partial class RegistrationService(
                 EnumText.ToCode(r.Visit.PaymentStatus),
                 r.Visit.ConsultationFee,
                 EnumText.ToCode(r.Visit.PayerType),
-                r.Encounter?.StartedAt,
-                r.Encounter?.CompletedAt,
-                QueueLabStatus(r.Visit.QueueStatus, r.LabTests, r.LabPending),
+                IsLabReview(r.Visit) ? r.Visit.AdditionalDetails.ReviewStartedAt : r.Encounter?.StartedAt,
+                IsLabReview(r.Visit) ? r.Visit.AdditionalDetails.ReviewCompletedAt : r.Encounter?.CompletedAt,
+                IsLabReview(r.Visit) ? "" : QueueLabStatus(r.Visit.QueueStatus, r.LabTests, r.LabPending),
                 r.Encounter?.FollowUpDate?.ToString("yyyy-MM-dd") ?? "",
                 r.Encounter is { AdmissionRequested: true, AdmissionType: { } admission } ? EnumText.ToCode(admission) : "",
                 r.Visit.VisitDate.ToString("yyyy-MM-dd"),
                 r.Visit.AdditionalDetails.RescheduledFrom?.ToString("yyyy-MM-dd") ?? "",
-                EnumText.ToCode(r.Visit.Source)))
+                EnumText.ToCode(r.Visit.Source),
+                r.Visit.AdditionalDetails.NotHereAt,
+                IsLabReview(r.Visit),
+                r.Visit.AdditionalDetails.LabResultsExpectedAt,
+                r.Visit.AdditionalDetails.LabResultsExpectedLater))
             .ToList();
 
         var dayKey = day.ToString("yyyy-MM-dd");
@@ -733,6 +739,109 @@ public sealed partial class RegistrationService(
             rows.GroupBy(r => r.Visit.DoctorId).Select(g => (g.Key, g.First().DoctorName)).ToList(), day, ct);
 
         return new FrontDeskQueueDto(dayKey, counts, items, doctors, pending);
+    }
+
+    /// <summary>
+    /// The desk called a waiting patient for the doctor and they weren't there (true), or they're back (false).
+    /// The desk screen skips them as "next" for a while (15 min) and then brings them back into line with their
+    /// token; the mark is shared by every desk. Only today's waiting visits.
+    /// </summary>
+    public async Task<RegistrationDto> MarkNotHereAsync(long visitId, bool notHere, CancellationToken ct)
+    {
+        Require("REGISTRATION_CREATE");
+        var visit = await VisitQuery().FirstOrDefaultAsync(v => v.Id == visitId, ct)
+                    ?? throw new NotFoundException("Visit not found.");
+        var waitingForDoctor = visit.QueueStatus == QueueStatus.Waiting
+                               && (visit.VisitStatus == VisitStatus.Registered || IsLabReview(visit));
+        if (!waitingForDoctor || visit.VisitDate != clock.Today)
+        {
+            throw new ConflictException("Only today's waiting patients can be marked.");
+        }
+
+        if (notHere)
+        {
+            visit.AdditionalDetails.NotHereAt = clock.UtcNow;
+            visit.AdditionalDetails.NotHereCount++;
+        }
+        else
+        {
+            visit.AdditionalDetails.NotHereAt = null;
+        }
+
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Visit {VisitNumber} marked {State}", visit.VisitNumber, notHere ? "not here" : "here");
+        return ToDto(visit);
+    }
+
+    // ------------------------------------------------------------------ lab results (desk, until the Lab module)
+
+    /// <summary>Back in the doctor's line to review lab results (same day, same token, no fee).</summary>
+    private static bool IsLabReview(Visit v) => v.AdditionalDetails.ReviewFor == "LAB";
+
+    /// <summary>The visit has tests the lab hasn't finished, and the doctor has finished the consultation.</summary>
+    private async Task<(Visit Visit, List<LabOrder> Pending)> LoadAwaitingResultsAsync(long visitId, CancellationToken ct)
+    {
+        Require("REGISTRATION_CREATE");
+        var visit = await VisitQuery().FirstOrDefaultAsync(v => v.Id == visitId, ct)
+                    ?? throw new NotFoundException("Visit not found.");
+        if (visit.QueueStatus is not (QueueStatus.Completed or QueueStatus.AdmissionRequested) || IsLabReview(visit))
+        {
+            throw new ConflictException("This visit isn't waiting for lab results.");
+        }
+
+        var pending = await db.LabOrders
+            .Where(o => o.VisitId == visit.Id && (o.Status == LabOrderStatus.Ordered || o.Status == LabOrderStatus.SampleCollected))
+            .ToListAsync(ct);
+        if (pending.Count == 0)
+        {
+            throw new ConflictException("All lab results for this visit are already in.");
+        }
+
+        return (visit, pending);
+    }
+
+    /// <summary>What the lab told the desk: results at a time today, or tomorrow / later. Shown on the queue row.</summary>
+    public async Task<RegistrationDto> SetLabResultsExpectedAsync(long visitId, LabExpectedRequestDto request, CancellationToken ct)
+    {
+        var (visit, _) = await LoadAwaitingResultsAsync(visitId, ct);
+        visit.AdditionalDetails.LabResultsExpectedLater = request.Later;
+        visit.AdditionalDetails.LabResultsExpectedAt = request.Later ? null : request.ExpectedAt;
+        await db.SaveChangesAsync(ct);
+        return ToDto(visit);
+    }
+
+    /// <summary>
+    /// All results are in (front desk marks it until the Lab module exists): every pending test becomes Completed.
+    /// Same day and the doctor finished an OPD consultation → the patient goes straight back into the doctor's line
+    /// as a lab review (same token, no fee, seen right after emergencies). Another day, or an admission request →
+    /// only "results ready"; the desk books a review appointment when the patient comes back.
+    /// </summary>
+    public async Task<RegistrationDto> MarkLabResultsReadyAsync(long visitId, CancellationToken ct)
+    {
+        var (visit, pending) = await LoadAwaitingResultsAsync(visitId, ct);
+        var now = clock.UtcNow;
+        foreach (var order in pending)
+        {
+            order.Status = LabOrderStatus.Completed;
+        }
+
+        visit.AdditionalDetails.LabResultsReadyAt = now;
+        visit.AdditionalDetails.LabResultsExpectedAt = null;
+        visit.AdditionalDetails.LabResultsExpectedLater = false;
+        var backInLine = visit.VisitDate == clock.Today && visit.QueueStatus == QueueStatus.Completed;
+        if (backInLine)
+        {
+            visit.QueueStatus = QueueStatus.Waiting; // VisitStatus stays Completed: the desk can't cancel / edit it
+            visit.AdditionalDetails.ReviewFor = "LAB";
+            visit.AdditionalDetails.ReviewReturnedAt = now;
+            visit.AdditionalDetails.NotHereAt = null;
+        }
+
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation(
+            "Lab results ready for visit {VisitNumber} ({Count} tests); back in line: {BackInLine}",
+            visit.VisitNumber, pending.Count, backInLine);
+        return ToDto(visit);
     }
 
     /// <summary>How far ahead a visit can be moved.</summary>

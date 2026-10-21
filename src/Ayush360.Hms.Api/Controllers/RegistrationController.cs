@@ -64,6 +64,21 @@ public sealed class RegistrationController(RegistrationService registration) : C
     public async Task<ActionResult<CreateRegistrationResponseDto>> CheckIn(long id, [FromBody] CheckInRequestDto request, CancellationToken ct) =>
         Ok(await registration.CheckInAsync(id, request, ct));
 
+    /// <summary>Lab told the desk when results will be ready (today at a time, or tomorrow / later).</summary>
+    [HttpPost("registrations/{id:long}/lab-expected")]
+    public async Task<ActionResult<RegistrationDto>> LabExpected(long id, [FromBody] LabExpectedRequestDto request, CancellationToken ct) =>
+        Ok(await registration.SetLabResultsExpectedAsync(id, request, ct));
+
+    /// <summary>All lab results are in. Same day: the patient goes back into the doctor's line for review.</summary>
+    [HttpPost("registrations/{id:long}/lab-ready")]
+    public async Task<ActionResult<RegistrationDto>> LabReady(long id, CancellationToken ct) =>
+        Ok(await registration.MarkLabResultsReadyAsync(id, ct));
+
+    /// <summary>Desk called the patient and they weren't there (notHere = true), or they're back (false).</summary>
+    [HttpPost("registrations/{id:long}/not-here")]
+    public async Task<ActionResult<RegistrationDto>> NotHere(long id, [FromBody] NotHereRequestDto request, CancellationToken ct) =>
+        Ok(await registration.MarkNotHereAsync(id, request.NotHere, ct));
+
     /// <summary>Cancel a visit the doctor hasn't seen (optionally refunding the fee).</summary>
     [HttpPost("registrations/{id:long}/cancel")]
     public async Task<ActionResult<RegistrationDto>> Cancel(long id, [FromBody] CancelVisitRequestDto request, CancellationToken ct) =>

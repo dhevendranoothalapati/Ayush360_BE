@@ -44,7 +44,8 @@ public sealed record QueueItemDto(
     int TestCount,
     string FollowUpDate, // yyyy-MM-dd review date the doctor set, or ""
     DateTimeOffset? LastVisitAt, // the patient's previous visit at this hospital (returning patients)
-    string LastVisitSummary); // its primary diagnosis, else the reason given at the desk
+    string LastVisitSummary, // its primary diagnosis, else the reason given at the desk
+    bool IsLabReview); // back to review lab results (same visit, consultation reopens; seen right after emergencies)
 
 /// <summary>GET /api/doctor/visits/{visitId}: everything the consultation screen and the printed prescription need.</summary>
 public sealed record ConsultationDto(

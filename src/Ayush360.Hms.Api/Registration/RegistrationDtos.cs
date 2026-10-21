@@ -260,6 +260,22 @@ public sealed record FrontDeskQueueDto(
     // Only for today's queue: the desk moves them to today (or another day) or cancels them.
     IReadOnlyList<FrontDeskQueueItemDto> Pending);
 
+/// <summary>POST /api/registration/registrations/{id}/lab-expected: when the lab said results will be ready.</summary>
+public sealed class LabExpectedRequestDto
+{
+    /// <summary>Expected time today (ISO). Null with Later = false clears it.</summary>
+    public DateTimeOffset? ExpectedAt { get; set; }
+
+    /// <summary>Tomorrow or later.</summary>
+    public bool Later { get; set; }
+}
+
+/// <summary>POST /api/registration/registrations/{id}/not-here: true = called but not there; false = here again.</summary>
+public sealed class NotHereRequestDto
+{
+    public bool NotHere { get; set; }
+}
+
 /// <summary>POST /api/registration/registrations/{id}/check-in: patient with a booked appointment has arrived.</summary>
 public sealed class CheckInRequestDto
 {
@@ -317,7 +333,11 @@ public sealed record FrontDeskQueueItemDto(
     string AdmissionType, // WARD, ICU, HDU, DAY_CARE when the doctor requested admission, else ""
     string VisitDate, // yyyy-MM-dd the visit is booked for
     string RescheduledFrom, // yyyy-MM-dd it was first booked for when the desk moved it, else ""
-    string Source); // WALK_IN, PHONE, ONLINE, REFERRAL, EMERGENCY, ICU (OP queue shows "Phone appointment")
+    string Source, // WALK_IN, PHONE, ONLINE, REFERRAL, EMERGENCY, ICU (OP queue shows "Phone appointment")
+    DateTimeOffset? NotHereAt, // desk called them and they weren't there (skipped as "next" for a while), else null
+    bool IsLabReview, // back in the doctor's line to review lab results (seen right after emergencies)
+    DateTimeOffset? LabResultsExpectedAt, // when the lab said results will be ready (awaiting results only)
+    bool LabResultsExpectedLater); // the lab said tomorrow or later
 
 // ---------------------------------------------------------------- inpatients (GET /api/registration/inpatients)
 // Everyone currently admitted (any admission date) + patients the doctor asked to admit.

@@ -342,6 +342,35 @@ public sealed class VisitDetails
     /// <summary>Booked appointment: when the patient arrived and was checked in (UTC). Waiting counts from here.</summary>
     public DateTimeOffset? CheckedInAt { get; set; }
 
+    /// <summary>Desk called the patient for the doctor but they weren't there (UTC). They are skipped as "next"
+    /// for a while (front desk rule, 15 min) and then come back into line with their token. Null = present.</summary>
+    public DateTimeOffset? NotHereAt { get; set; }
+
+    /// <summary>How many times the patient was called and wasn't there.</summary>
+    public int NotHereCount { get; set; }
+
+    /// <summary>When the lab said the results would be ready (UTC), as told to the desk.</summary>
+    public DateTimeOffset? LabResultsExpectedAt { get; set; }
+
+    /// <summary>The lab said results come tomorrow or later (no time today).</summary>
+    public bool LabResultsExpectedLater { get; set; }
+
+    /// <summary>When all ordered tests were marked done (UTC). Front desk marks it until the Lab module exists.</summary>
+    public DateTimeOffset? LabResultsReadyAt { get; set; }
+
+    /// <summary>"LAB" = the visit went back into the doctor's line to review lab results (same day, same token, no
+    /// fee). The visit itself stays Completed so the desk can't cancel or edit it; QueueStatus shows where it is.</summary>
+    public string? ReviewFor { get; set; }
+
+    /// <summary>When the patient went back into the line for the review (UTC). Waiting counts from here.</summary>
+    public DateTimeOffset? ReviewReturnedAt { get; set; }
+
+    /// <summary>When the doctor opened the review (UTC).</summary>
+    public DateTimeOffset? ReviewStartedAt { get; set; }
+
+    /// <summary>When the doctor finished the review (UTC).</summary>
+    public DateTimeOffset? ReviewCompletedAt { get; set; }
+
     /// <summary>Why the desk cancelled the visit (patient didn't come, booked by mistake...).</summary>
     public string? CancelReason { get; set; }
 

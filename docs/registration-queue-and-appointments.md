@@ -14,6 +14,7 @@ The only migration in this area is `AddDoctorBreaks` (`doctor.doctor_breaks`).
 | GET | `fee-quote?doctorId=&patientId=&date=` | `date` (yyyy-MM-dd, optional) = quote for an appointment day |
 | POST | `registrations` | `visit.visitDate` "" = today; later date or `source = PHONE` → **Booked** (no payment, no receipt) |
 | POST | `registrations/{id}/check-in` | `{ payment }` – Booked visit for today → fee re-quoted, receipt, `Waiting`; token unchanged |
+| POST | `registrations/{id}/not-here` | `{ notHere }` – today's Waiting only; sets / clears `AdditionalDetails.NotHereAt` (+ `NotHereCount`); the desk skips them as "next" for 15 min |
 | POST | `registrations/{id}/cancel` | `{ reason, refund }` – Booked or Waiting only; refund → `RF-` receipt dated today |
 | POST | `registrations/{id}/reschedule` | `{ date }` – OPD only, today … +30 days; new `A-` token for that day; Booked stays Booked |
 | GET | `queue?date=` | OP queue (OPD + Emergency) for a day + `pending[]` (today only: every earlier unseen OPD visit/booking) + `doctors[]` board + `counts` (incl. `booked`) |
@@ -38,7 +39,8 @@ Doctor: `GET /api/doctor/availability`, `POST availability/away`, `POST availabi
   `(tenant_id, visit_date, token_number)`. Appointments use `TOKEN_A` of the visit day. The waiting line is ordered by
   token number in the UI (emergencies first).
 - `VisitDetails` JSON: `RescheduledFrom`, `RescheduledAt`, `CheckedInAt`, `CancelReason`, `CancelledAt`, `CancelledByUserId`.
-- Queue item DTO ends with `VisitDate`, `RescheduledFrom`, `Source`.
+- Queue item DTO ends with `VisitDate`, `RescheduledFrom`, `Source`, `NotHereAt`.
+- Pending: SignalR hub for real-time calling (Called status, doctor room numbers, display screens) – see the frontend guide, section 9.
 
 ## 3. Change log
 
@@ -46,3 +48,4 @@ Doctor: `GET /api/doctor/availability`, `POST availability/away`, `POST availabi
 |---|---|
 | Oct 2026 | Front desk queue, inpatients, doctor availability / breaks, cancel with refund, reschedule, pending visits |
 | 21 Oct 2026 | Appointments (Booked state, check-in, `visitDate`, Phone source, token at booking, fee quote by date) |
+| 21 Oct 2026 | Not-here mark for the desk's next patient |

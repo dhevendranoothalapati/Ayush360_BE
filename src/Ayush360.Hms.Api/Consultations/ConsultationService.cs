@@ -109,17 +109,19 @@ public sealed class ConsultationService(
                 EnumText.ToCode(r.Patient.Gender),
                 AgeOn(r.Patient.DateOfBirth, day),
                 r.Visit.ReasonForVisit ?? "",
-                // Arrived (checked in) / moved to today: waits from then, not from when it was first booked.
-                r.Visit.AdditionalDetails.CheckedInAt ?? r.Visit.AdditionalDetails.RescheduledAt ?? r.Visit.CreatedAt,
+                // Lab review: waits from when it went back into the line. Arrived (checked in) / moved to today:
+                // waits from then, not from when it was first booked.
+                IsLabReview(r.Visit) ? r.Visit.AdditionalDetails.ReviewReturnedAt ?? r.Visit.CreatedAt
+                    : r.Visit.AdditionalDetails.CheckedInAt ?? r.Visit.AdditionalDetails.RescheduledAt ?? r.Visit.CreatedAt,
                 EnumText.ToCode(r.Visit.QueueStatus),
                 r.Visit.IsFollowUp,
                 r.IsReturning,
                 r.Visit.TriageLevel is { } triage ? EnumText.ToCode(triage) : "",
                 r.DoctorName,
                 r.Encounter?.Id,
-                r.Encounter?.StartedAt,
-                r.Encounter?.CompletedAt,
-                LabStatusOf(r.Visit.QueueStatus, r.LabTests, r.LabPending),
+                IsLabReview(r.Visit) ? r.Visit.AdditionalDetails.ReviewStartedAt : r.Encounter?.StartedAt,
+                IsLabReview(r.Visit) ? r.Visit.AdditionalDetails.ReviewCompletedAt : r.Encounter?.CompletedAt,
+                IsLabReview(r.Visit) ? "" : LabStatusOf(r.Visit.QueueStatus, r.LabTests, r.LabPending),
                 DiagnosisOf(r.Visit.Id),
                 medicineCounts.GetValueOrDefault(r.Visit.Id),
                 r.LabTests,
@@ -127,7 +129,8 @@ public sealed class ConsultationService(
                 lastVisitOf[r.Visit.Id]?.CreatedAt,
                 lastVisitOf[r.Visit.Id] is { } last
                     ? primaryDx.TryGetValue(last.Id, out var lastDx) ? lastDx.Description : last.ReasonForVisit ?? ""
-                    : ""))
+                    : "",
+                IsLabReview(r.Visit)))
             .ToList();
 
         var counts = new QueueCountsDto(
@@ -140,6 +143,12 @@ public sealed class ConsultationService(
 
         return new DoctorQueueDto(day.ToString("yyyy-MM-dd"), me?.FullName, me is not null, counts, items);
     }
+
+    /// <summary>The desk marked lab results ready the same day: the patient is back in this doctor's line.</summary>
+    private static bool IsLabReview(Visit v) => v.AdditionalDetails.ReviewFor == "LAB";
+
+    /// <summary>Back in the line and the doctor hasn't opened the review yet.</summary>
+    private static bool ReviewWaiting(Visit v) => IsLabReview(v) && v.QueueStatus == QueueStatus.Waiting;
 
     private const string LabAwaitingResults = "AWAITING_RESULTS";
     private const string LabResultsReady = "RESULTS_READY";
@@ -168,6 +177,22 @@ public sealed class ConsultationService(
         var me = await RequireOwnPatientAsync(visit, ct);
 
         var encounter = await EncounterQuery().FirstOrDefaultAsync(e => e.VisitId == visitId, ct);
+        if (encounter is not null && ReviewWaiting(visit) && visit.VisitDate == clock.Today)
+        {
+            // Lab results review: the same consultation reopens; the patient is with the doctor again.
+            visit.QueueStatus = QueueStatus.InConsultation;
+            visit.AdditionalDetails.ReviewStartedAt = clock.UtcNow;
+            visit.AdditionalDetails.NotHereAt = null;
+            foreach (var pause in await db.DoctorBreaks.Where(x => x.DoctorId == me.Id && x.EndedAt == null).ToListAsync(ct))
+            {
+                pause.EndedAt = visit.AdditionalDetails.ReviewStartedAt;
+            }
+
+            await db.SaveChangesAsync(ct);
+            logger.LogInformation("Lab review started for visit {VisitNumber}", visit.VisitNumber);
+            return await ToDtoAsync(visit, encounter, ct);
+        }
+
         if (encounter is not null)
         {
             return await ToDtoAsync(visit, encounter, ct); // already started (e.g. pressed twice)
@@ -263,7 +288,15 @@ public sealed class ConsultationService(
         ThrowIfErrors(Validate(input, visit.VisitDate, complete || correcting));
         Apply(encounter, visit, input);
 
-        if (correcting)
+        if (correcting && complete && IsLabReview(visit) && visit.QueueStatus == QueueStatus.InConsultation)
+        {
+            // "Complete review": the patient leaves the doctor again; changes are kept as an edit of the consultation.
+            encounter.LastEditedAt = clock.UtcNow;
+            encounter.LastEditedBy = me.FullName;
+            visit.AdditionalDetails.ReviewCompletedAt = clock.UtcNow;
+            visit.QueueStatus = encounter.AdmissionRequested ? QueueStatus.AdmissionRequested : QueueStatus.Completed;
+        }
+        else if (correcting)
         {
             encounter.LastEditedAt = clock.UtcNow;
             encounter.LastEditedBy = me.FullName;
@@ -472,6 +505,12 @@ public sealed class ConsultationService(
         encounter.AdmissionType = input.AdmissionRequested ? ParseEnum<AdmissionType>(input.AdmissionType) : null;
         encounter.AdmissionReason = input.AdmissionRequested ? Blank(input.AdmissionReason) : null;
 
+        // A test the lab already worked on keeps its status when the doctor saves again (e.g. during a lab review);
+        // matched by code, else by name.
+        var labStatusByTest = encounter.LabOrders
+            .GroupBy(o => (o.TestCode ?? o.TestName).Trim().ToUpperInvariant())
+            .ToDictionary(g => g.Key, g => g.First().Status);
+
         // While in progress the lines are simply replaced with what the doctor sent.
         foreach (var old in encounter.Diagnoses.ToList()) db.Remove(old);
         foreach (var old in encounter.Prescriptions.ToList()) db.Remove(old);
@@ -524,7 +563,8 @@ public sealed class ConsultationService(
                 TestCode = Blank(l.TestCode),
                 TestName = l.TestName.Trim(),
                 Notes = Blank(l.Notes),
-                Status = LabOrderStatus.Ordered,
+                Status = labStatusByTest.GetValueOrDefault(
+                    (Blank(l.TestCode) ?? l.TestName.Trim()).ToUpperInvariant(), LabOrderStatus.Ordered),
                 SortOrder = i + 1,
             });
         }
@@ -535,10 +575,11 @@ public sealed class ConsultationService(
         var me = await CurrentDoctorAsync(ct);
         var ownPatient = me is not null && visit.DoctorId == me.Id && currentUser.HasPermission("ENCOUNTER_EDIT");
         var canStart = ownPatient
-                       && encounter is null
                        && visit.VisitDate == clock.Today
-                       && visit.VisitStatus == VisitStatus.Registered
-                       && visit.QueueStatus is QueueStatus.Waiting or QueueStatus.InConsultation;
+                       && ((encounter is null
+                            && visit.VisitStatus == VisitStatus.Registered
+                            && visit.QueueStatus is QueueStatus.Waiting or QueueStatus.InConsultation)
+                           || (encounter is not null && ReviewWaiting(visit))); // lab review: reopen
         var canEdit = ownPatient
                       && encounter is not null
                       && (encounter.Status == EncounterStatus.InProgress || visit.VisitDate == clock.Today);
