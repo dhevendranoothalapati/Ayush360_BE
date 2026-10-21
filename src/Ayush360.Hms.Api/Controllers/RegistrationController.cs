@@ -34,8 +34,9 @@ public sealed class RegistrationController(RegistrationService registration) : C
 
     /// <summary>Fee to collect for this doctor (free follow-up rule applied).</summary>
     [HttpGet("fee-quote")]
-    public async Task<ActionResult<FeeQuoteDto>> FeeQuote([FromQuery] long doctorId, [FromQuery] long? patientId, CancellationToken ct) =>
-        Ok(await registration.GetFeeQuoteAsync(doctorId, patientId, ct));
+    public async Task<ActionResult<FeeQuoteDto>> FeeQuote(
+        [FromQuery] long doctorId, [FromQuery] long? patientId, [FromQuery] string? date, CancellationToken ct) =>
+        Ok(await registration.GetFeeQuoteAsync(doctorId, patientId, ct, date));
 
     /// <summary>Takes the payment (if any) and creates patient (if new), visit, token and receipt in one transaction.</summary>
     [HttpPost("registrations")]
@@ -57,6 +58,21 @@ public sealed class RegistrationController(RegistrationService registration) : C
     [HttpGet("inpatients")]
     public async Task<ActionResult<InpatientListDto>> Inpatients(CancellationToken ct) =>
         Ok(await registration.GetInpatientsAsync(ct));
+
+    /// <summary>Patient with a booked appointment arrived: collect the fee, issue today's token, join the queue.</summary>
+    [HttpPost("registrations/{id:long}/check-in")]
+    public async Task<ActionResult<CreateRegistrationResponseDto>> CheckIn(long id, [FromBody] CheckInRequestDto request, CancellationToken ct) =>
+        Ok(await registration.CheckInAsync(id, request, ct));
+
+    /// <summary>Cancel a visit the doctor hasn't seen (optionally refunding the fee).</summary>
+    [HttpPost("registrations/{id:long}/cancel")]
+    public async Task<ActionResult<RegistrationDto>> Cancel(long id, [FromBody] CancelVisitRequestDto request, CancellationToken ct) =>
+        Ok(await registration.CancelVisitAsync(id, request, ct));
+
+    /// <summary>Move an OPD visit the doctor hasn't seen to another day (new token for that day, fee carries over).</summary>
+    [HttpPost("registrations/{id:long}/reschedule")]
+    public async Task<ActionResult<RegistrationDto>> Reschedule(long id, [FromBody] RescheduleVisitRequestDto request, CancellationToken ct) =>
+        Ok(await registration.RescheduleVisitAsync(id, request, ct));
 
     /// <summary>Today's counters for the front desk header (my collection; hospital total for admins).</summary>
     [HttpGet("registrations/summary")]

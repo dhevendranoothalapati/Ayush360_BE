@@ -42,6 +42,9 @@ public sealed class PatientInputDto
 /// <summary>Visit details typed at the desk (types.ts → VisitInput: visit + payer + Emergency/ICU fields).</summary>
 public sealed class VisitInputDto
 {
+    /// <summary>yyyy-MM-dd for a future OPD appointment (pay on arrival); "" = today (register now and pay).</summary>
+    public string VisitDate { get; set; } = "";
+
     /// <summary>Advance / deposit for Emergency / ICU, digits as text ("" = none).</summary>
     public string DepositAmount { get; set; } = "";
 
@@ -135,6 +138,9 @@ public sealed class RegistrationDto
     public long Id { get; init; }
     public string RegistrationNumber { get; init; } = "";
     public DateTimeOffset RegistrationDate { get; init; }
+
+    /// <summary>yyyy-MM-dd the visit is booked for (differs from RegistrationDate when the desk moved it).</summary>
+    public string VisitDate { get; init; } = "";
     public string RegistrationType { get; init; } = "";
     public long PatientId { get; init; }
     public long DepartmentId { get; init; }
@@ -249,10 +255,37 @@ public sealed record FrontDeskQueueDto(
     string Date,
     FrontDeskQueueCountsDto Counts,
     IReadOnlyList<FrontDeskQueueItemDto> Items,
-    IReadOnlyList<Consultations.FrontDeskDoctorDto> Doctors); // status + pace of each doctor in the list
+    IReadOnlyList<Consultations.FrontDeskDoctorDto> Doctors, // status + pace of each doctor in the list
+    // Earlier OPD visits that were never seen (patient didn't come / doctor didn't see them), any age.
+    // Only for today's queue: the desk moves them to today (or another day) or cancels them.
+    IReadOnlyList<FrontDeskQueueItemDto> Pending);
+
+/// <summary>POST /api/registration/registrations/{id}/check-in: patient with a booked appointment has arrived.</summary>
+public sealed class CheckInRequestDto
+{
+    /// <summary>Consultation fee (decided by the server on the day, free follow-up rule applied). null when nothing is due.</summary>
+    public PaymentInputDto? Payment { get; set; }
+}
+
+/// <summary>POST /api/registration/registrations/{id}/cancel</summary>
+public sealed class CancelVisitRequestDto
+{
+    public string Reason { get; set; } = "";
+
+    /// <summary>Give the consultation fee back (adds a refund receipt today).</summary>
+    public bool Refund { get; set; }
+}
+
+/// <summary>POST /api/registration/registrations/{id}/reschedule</summary>
+public sealed class RescheduleVisitRequestDto
+{
+    /// <summary>yyyy-MM-dd: today or a later day (up to 30 days ahead).</summary>
+    public string Date { get; set; } = "";
+}
 
 public sealed record FrontDeskQueueCountsDto(
-    int Total, int Waiting, int InConsultation, int Completed, int AdmissionRequested, int AwaitingLabResults, int Emergency);
+    int Total, int Waiting, int InConsultation, int Completed, int AdmissionRequested, int AwaitingLabResults, int Emergency,
+    int Booked); // appointments for the day not checked in yet (not counted in Total)
 
 public sealed record FrontDeskQueueItemDto(
     long VisitId,
@@ -281,7 +314,10 @@ public sealed record FrontDeskQueueItemDto(
     DateTimeOffset? CompletedAt,
     string LabStatus, // "", AWAITING_RESULTS, RESULTS_READY
     string FollowUpDate, // review date the doctor set (yyyy-MM-dd) or "": the desk can book it
-    string AdmissionType); // WARD, ICU, HDU, DAY_CARE when the doctor requested admission, else ""
+    string AdmissionType, // WARD, ICU, HDU, DAY_CARE when the doctor requested admission, else ""
+    string VisitDate, // yyyy-MM-dd the visit is booked for
+    string RescheduledFrom, // yyyy-MM-dd it was first booked for when the desk moved it, else ""
+    string Source); // WALK_IN, PHONE, ONLINE, REFERRAL, EMERGENCY, ICU (OP queue shows "Phone appointment")
 
 // ---------------------------------------------------------------- inpatients (GET /api/registration/inpatients)
 // Everyone currently admitted (any admission date) + patients the doctor asked to admit.

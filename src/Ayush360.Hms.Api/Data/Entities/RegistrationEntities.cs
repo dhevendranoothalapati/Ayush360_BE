@@ -247,6 +247,8 @@ public enum RegistrationType
 public enum VisitSource
 {
     WalkIn,
+    /// <summary>Booked over the phone: always an appointment (pay on arrival, token at check-in), even for today.</summary>
+    Phone,
     Online,
     Referral,
     Emergency,
@@ -264,6 +266,9 @@ public enum VisitStatus
 /// <summary>Values for visits.queue_status.</summary>
 public enum QueueStatus
 {
+    /// <summary>OPD appointment (later day or phone booking): queue token given at booking, nothing paid yet.
+    /// On the day the desk checks the patient in: fee collected, A-token issued, status WAITING.</summary>
+    Booked,
     Waiting,
     InConsultation,
     Completed,
@@ -327,6 +332,23 @@ public sealed class VisitDetails
 
     /// <summary>Hospital-specific extra fields (field name -> value), e.g. "ambulanceNumber": "TS09AB1234".</summary>
     public Dictionary<string, string>? Custom { get; set; }
+
+    /// <summary>OPD visit moved to another day by the desk: the day it was first booked for.</summary>
+    public DateOnly? RescheduledFrom { get; set; }
+
+    /// <summary>When it was last moved (UTC). The patient's waiting time counts from here.</summary>
+    public DateTimeOffset? RescheduledAt { get; set; }
+
+    /// <summary>Booked appointment: when the patient arrived and was checked in (UTC). Waiting counts from here.</summary>
+    public DateTimeOffset? CheckedInAt { get; set; }
+
+    /// <summary>Why the desk cancelled the visit (patient didn't come, booked by mistake...).</summary>
+    public string? CancelReason { get; set; }
+
+    public DateTimeOffset? CancelledAt { get; set; }
+
+    /// <summary>core.users.id of the receptionist who cancelled it.</summary>
+    public long? CancelledByUserId { get; set; }
 }
 
 /// <summary>Attendant / next of kin (inside visits.additional_details).</summary>
@@ -464,6 +486,9 @@ public enum ReceiptKind
 {
     Consultation,
     Deposit,
+
+    /// <summary>Money given back (cancelled visit). Amount is positive; collection totals subtract it.</summary>
+    Refund,
 }
 
 public enum PaymentMode

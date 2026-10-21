@@ -109,10 +109,10 @@ public sealed partial class RegistrationService(
         var open = visits.Where(v => IsOpen(v, today)).ToList();
         var openIds = open.Select(v => v.Id).ToList();
         var receipts = await db.Receipts
-            .Where(r => openIds.Contains(r.VisitId) && r.Status == ReceiptStatus.Issued)
+            .Where(r => openIds.Contains(r.VisitId) && r.Status == ReceiptStatus.Issued && r.Kind != ReceiptKind.Refund)
             .ToListAsync(ct);
 
-        var lastVisit = visits.FirstOrDefault(v => !open.Contains(v));
+        var lastVisit = visits.FirstOrDefault(v => !open.Contains(v) && v.QueueStatus != QueueStatus.Booked);
         return new PatientContextDto(
             ToDto(patient),
             open.Select(v => new OpenVisitDto(ToDto(v), ToDto(receipts.FirstOrDefault(r => r.VisitId == v.Id)))).ToList(),
@@ -122,7 +122,7 @@ public sealed partial class RegistrationService(
 
     // ------------------------------------------------------------------ fees
 
-    public async Task<FeeQuoteDto> GetFeeQuoteAsync(long doctorId, long? patientId, CancellationToken ct)
+    public async Task<FeeQuoteDto> GetFeeQuoteAsync(long doctorId, long? patientId, CancellationToken ct, string? date = null)
     {
         if (patientId is not null)
         {
@@ -131,11 +131,11 @@ public sealed partial class RegistrationService(
 
         var doctor = await db.Doctors.FirstOrDefaultAsync(d => d.Id == doctorId, ct)
                      ?? throw new NotFoundException("Doctor not found.");
-        return await QuoteFeeAsync(doctor, patientId, ct);
+        return await QuoteFeeAsync(doctor, patientId, ct, OnDay(date));
     }
 
     /// <summary>Free follow-up rule: same doctor, within N days of the last PAID visit (not the same day).</summary>
-    private async Task<FeeQuoteDto> QuoteFeeAsync(Doctor doctor, long? patientId, CancellationToken ct)
+    private async Task<FeeQuoteDto> QuoteFeeAsync(Doctor doctor, long? patientId, CancellationToken ct, DateOnly? on = null)
     {
         var days = await db.Settings.Select(s => (int?)s.FollowUpFreeDays).FirstOrDefaultAsync(ct) ?? 0;
         var standard = new FeeQuoteDto(doctor.Id, doctor.ConsultationFee, doctor.ConsultationFee, false, null, null, null, days);
@@ -149,6 +149,7 @@ public sealed partial class RegistrationService(
                         && v.DoctorId == doctor.Id
                         && v.VisitStatus != VisitStatus.Cancelled
                         && !v.IsFollowUp
+                        && v.QueueStatus != QueueStatus.Booked // an appointment not paid yet
                         && v.ConsultationFee > 0)
             .OrderByDescending(v => v.CreatedAt)
             .FirstOrDefaultAsync(ct);
@@ -157,7 +158,7 @@ public sealed partial class RegistrationService(
             return standard;
         }
 
-        var today = clock.Today;
+        var today = on ?? clock.Today;
         var freeUntil = lastPaid.VisitDate.AddDays(days);
         if (today == lastPaid.VisitDate || today > freeUntil)
         {
@@ -178,7 +179,7 @@ public sealed partial class RegistrationService(
 
     public async Task<CreateRegistrationResponseDto> CreateRegistrationAsync(CreateRegistrationRequestDto request, CancellationToken ct)
     {
-        Require("REGISTRATION_CREATE", "PAYMENT_COLLECT");
+        Require("REGISTRATION_CREATE");
         var tenantId = currentUser.RequireTenantId();
         var userId = currentUser.RequireUserId();
         var visit = request.Visit;
@@ -189,6 +190,32 @@ public sealed partial class RegistrationService(
 
         // --- visit checks
         var errors = new Dictionary<string, string>();
+
+        // Future date = appointment: day reserved, pay on arrival, token issued at check-in. OPD only.
+        var visitDay = today;
+        if (!string.IsNullOrWhiteSpace(visit.VisitDate))
+        {
+            if (!DateOnly.TryParseExact(visit.VisitDate, "yyyy-MM-dd", out visitDay))
+            {
+                errors["visitDate"] = "Choose a date";
+                visitDay = today;
+            }
+            else if (visitDay < today)
+            {
+                errors["visitDate"] = "Choose today or a later date";
+            }
+            else if (visitDay > today.AddDays(RescheduleMaxDays))
+            {
+                errors["visitDate"] = $"Appointments can be booked up to {RescheduleMaxDays} days ahead";
+            }
+            else if (visitDay > today && acute)
+            {
+                errors["visitDate"] = "Emergency / ICU is registered for today only";
+            }
+        }
+
+        // Phone appointment: the patient isn't here yet, so nothing is collected even for today.
+        var booking = visitDay > today || (!acute && visit.Source == "PHONE");
         var (department, doctor) = await FindDepartmentAndDoctorAsync(visit, errors, ct);
         if (string.IsNullOrWhiteSpace(visit.ReasonForVisit))
         {
@@ -232,60 +259,29 @@ public sealed partial class RegistrationService(
 
         ThrowIfErrors(errors);
 
-        // --- one open visit per doctor per day
+        // --- one open visit (or appointment) per doctor per day
         if (patient is not null)
         {
-            var duplicate = await VisitQuery()
-                .Where(v => v.PatientId == patient.Id && v.DoctorId == doctor!.Id && v.VisitDate == today
-                            && v.VisitStatus == VisitStatus.Registered
-                            && (v.QueueStatus == QueueStatus.Waiting || v.QueueStatus == QueueStatus.InConsultation))
-                .FirstOrDefaultAsync(ct);
-            if (duplicate is not null)
-            {
-                throw new ConflictException(
-                    $"This patient already has an open visit today with {DoctorName(duplicate.Doctor)} (token {duplicate.TokenNumber}).");
-            }
+            await EnsureNoOpenVisitAsync(patient.Id, doctor!.Id, visitDay, null, ct);
         }
 
-        // --- fee (decided by the server) and payment BEFORE anything is created
+        // --- fee (decided by the server) and payment BEFORE anything is created.
+        // Appointment: the fee is only indicative (re-quoted at check-in); nothing is collected now.
         var quote = acute
             ? new FeeQuoteDto(doctor!.Id, 0, doctor.ConsultationFee, false, null, null, null, 0)
-            : await QuoteFeeAsync(doctor!, patient?.Id, ct);
-        var dueNow = acute ? deposit : quote.Fee;
+            : await QuoteFeeAsync(doctor!, patient?.Id, ct, visitDay);
+        var dueNow = booking ? 0 : acute ? deposit : quote.Fee;
         var paymentMode = PaymentMode.FollowUp;
         string? reference = null;
         if (dueNow > 0)
         {
-            var payment = request.Payment;
-            if (payment is null || payment.Amount != dueNow)
-            {
-                throw new BadRequestException(acute
-                    ? "Payment amount does not match the deposit."
-                    : "Payment amount does not match the consultation fee.");
-            }
-
-            paymentMode = ParseEnum<PaymentMode>(payment.Mode) ?? throw new BadRequestException("Choose a payment mode.");
-            if (paymentMode == PaymentMode.FollowUp)
-            {
-                throw new BadRequestException("Choose cash, UPI or card.");
-            }
-
-            reference = string.IsNullOrWhiteSpace(payment.ReferenceNumber) ? null : payment.ReferenceNumber.Trim();
-            if (paymentMode != PaymentMode.Cash && reference is null)
-            {
-                throw new BadRequestException("Transaction reference is required for UPI / card payments.");
-            }
-
-            if (reference == "0000")
-            {
-                // Demo hook to try the failure path (same as the mock).
-                throw new PaymentDeclinedException();
-            }
+            Require("PAYMENT_COLLECT");
+            (paymentMode, reference) = CheckPayment(request.Payment, dueNow, acute);
         }
 
         // --- save everything in one transaction
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
-        var day = today.ToString("yyyyMMdd");
+        var day = visitDay.ToString("yyyyMMdd");
 
         if (isNewPatient)
         {
@@ -304,11 +300,13 @@ public sealed partial class RegistrationService(
             ApplyPatient(patient!, request.Patient);
         }
 
+        // Appointments get their queue token now (same A-series as walk-ins), so the patient knows it on the phone
+        // and keeps that place in the line; the fee is collected at check-in.
         var series = icu ? "I" : acute ? "E" : "A";
         var tokenSeq = await sequences.NextAsync(tenantId, $"TOKEN_{series}", day, ct);
         var visitSeq = await sequences.NextAsync(tenantId, "VISIT", day, ct);
         long? followUpOfId = null;
-        if (quote.IsFollowUp)
+        if (quote.IsFollowUp && !booking)
         {
             followUpOfId = await db.Visits.Where(v => v.VisitNumber == quote.FollowUpOf).Select(v => (long?)v.Id).FirstOrDefaultAsync(ct);
         }
@@ -319,20 +317,20 @@ public sealed partial class RegistrationService(
             Patient = patient!,
             VisitNumber = $"{(icu ? "ICU" : acute ? "ER" : "OP")}-{day}-{visitSeq:0000}",
             TokenNumber = $"{series}-{tokenSeq:000}",
-            VisitDate = today,
+            VisitDate = visitDay,
             RegistrationType = icu ? RegistrationType.Icu : acute ? RegistrationType.Emergency : RegistrationType.Op,
             Source = ParseEnum<VisitSource>(visit.Source) ?? VisitSource.WalkIn,
             DepartmentId = department!.Id,
-            DoctorId = doctor.Id,
+            DoctorId = doctor!.Id,
             ReasonForVisit = visit.ReasonForVisit.Trim(),
             MessageConsent = visit.MessageConsent,
             VisitStatus = VisitStatus.Registered,
-            QueueStatus = QueueStatus.Waiting,
+            QueueStatus = booking ? QueueStatus.Booked : QueueStatus.Waiting,
             ConsultationFee = acute ? 0 : quote.Fee,
-            PaymentStatus = acute ? PaymentStatus.Unpaid : PaymentStatus.Paid,
+            PaymentStatus = acute || booking ? PaymentStatus.Unpaid : PaymentStatus.Paid,
             DepositAmount = deposit,
-            IsFollowUp = quote.IsFollowUp,
-            FollowUpOfVisitId = followUpOfId,
+            IsFollowUp = !booking && quote.IsFollowUp,
+            FollowUpOfVisitId = booking ? null : followUpOfId,
         };
         ApplyPayerAndAcute(entity, visit);
         db.Visits.Add(entity);
@@ -350,7 +348,7 @@ public sealed partial class RegistrationService(
 
         // Emergency / ICU without deposit: nothing collected, so no receipt (billed later).
         Receipt? receipt = null;
-        if (!(acute && dueNow == 0))
+        if (!booking && !(acute && dueNow == 0))
         {
             var receiptSeq = await sequences.NextAsync(tenantId, "RECEIPT", day, ct);
             receipt = new Receipt
@@ -370,13 +368,17 @@ public sealed partial class RegistrationService(
             db.Receipts.Add(receipt);
         }
 
-        patient!.LastVisitDate = today;
+        if (!booking)
+        {
+            patient!.LastVisitDate = today;
+        }
+
         await db.SaveChangesAsync(ct);
         await transaction.CommitAsync(ct);
 
         logger.LogInformation(
-            "Registered visit {VisitNumber} token {TokenNumber} (new patient: {IsNewPatient})",
-            entity.VisitNumber, entity.TokenNumber, isNewPatient);
+            "Registered visit {VisitNumber} token {TokenNumber} on {VisitDate} (new patient: {IsNewPatient}, booking: {Booking})",
+            entity.VisitNumber, entity.TokenNumber, visitDay, isNewPatient, booking);
 
         entity.Department = department;
         entity.Doctor = doctor;
@@ -385,8 +387,147 @@ public sealed partial class RegistrationService(
             await db.Entry(entity).Reference(v => v.FollowUpOf).LoadAsync(ct);
         }
 
-        return new CreateRegistrationResponseDto(isNewPatient, ToDto(patient), ToDto(entity), ToDto(receipt));
+        return new CreateRegistrationResponseDto(isNewPatient, ToDto(patient!), ToDto(entity), ToDto(receipt));
     }
+
+    /// <summary>
+    /// The patient with today's appointment has arrived: fee re-quoted for today (free follow-up rule), collected,
+    /// today's A-token issued and the patient joins the doctor's queue. Visit number stays the same.
+    /// </summary>
+    public async Task<CreateRegistrationResponseDto> CheckInAsync(long visitId, CheckInRequestDto request, CancellationToken ct)
+    {
+        Require("REGISTRATION_CREATE");
+        var userId = currentUser.RequireUserId();
+        var visit = await VisitQuery().FirstOrDefaultAsync(v => v.Id == visitId, ct)
+                    ?? throw new NotFoundException("Visit not found.");
+        if (visit.VisitStatus != VisitStatus.Registered || visit.QueueStatus != QueueStatus.Booked)
+        {
+            throw new ConflictException("This visit is not a booked appointment (already checked in or cancelled).");
+        }
+
+        var today = clock.Today;
+        var now = clock.UtcNow;
+        if (visit.VisitDate != today)
+        {
+            throw new ConflictException(visit.VisitDate > today
+                ? "The appointment is for a later day. Change the date to today first."
+                : "The appointment date has passed. Change the date to today first.");
+        }
+
+        await EnsureNoOpenVisitAsync(visit.PatientId, visit.DoctorId, today, visit.Id, ct);
+
+        var quote = await QuoteFeeAsync(visit.Doctor, visit.PatientId, ct, today);
+        var paymentMode = PaymentMode.FollowUp;
+        string? reference = null;
+        if (quote.Fee > 0)
+        {
+            Require("PAYMENT_COLLECT");
+            (paymentMode, reference) = CheckPayment(request.Payment, quote.Fee, false);
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        var day = today.ToString("yyyyMMdd");
+        long? followUpOfId = null;
+        if (quote.IsFollowUp)
+        {
+            followUpOfId = await db.Visits.Where(v => v.VisitNumber == quote.FollowUpOf).Select(v => (long?)v.Id).FirstOrDefaultAsync(ct);
+        }
+
+        // The token was given at booking and stays the same.
+        visit.QueueStatus = QueueStatus.Waiting;
+        visit.PaymentStatus = PaymentStatus.Paid;
+        visit.ConsultationFee = quote.Fee;
+        visit.IsFollowUp = quote.IsFollowUp;
+        visit.FollowUpOfVisitId = followUpOfId;
+        visit.AdditionalDetails.CheckedInAt = now;
+
+        var receiptSeq = await sequences.NextAsync(visit.TenantId, "RECEIPT", day, ct);
+        var receipt = new Receipt
+        {
+            TenantId = visit.TenantId,
+            VisitId = visit.Id,
+            ReceiptNumber = $"RC-{day}-{receiptSeq:00000}",
+            Kind = ReceiptKind.Consultation,
+            Amount = quote.Fee,
+            PaymentMode = paymentMode,
+            ReferenceNumber = reference,
+            CollectedByUserId = userId,
+            CollectedAt = now,
+            CollectedOn = today,
+            Status = ReceiptStatus.Issued,
+        };
+        db.Receipts.Add(receipt);
+
+        var patient = await db.Patients.FirstAsync(p => p.Id == visit.PatientId, ct);
+        patient.LastVisitDate = today;
+        await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+
+        logger.LogInformation(
+            "Appointment {VisitNumber} checked in (token {Token})", visit.VisitNumber, visit.TokenNumber);
+
+        if (followUpOfId is not null)
+        {
+            await db.Entry(visit).Reference(v => v.FollowUpOf).LoadAsync(ct);
+        }
+
+        return new CreateRegistrationResponseDto(false, ToDto(patient), ToDto(visit), ToDto(receipt));
+    }
+
+    /// <summary>One open visit or appointment per patient, doctor and day.</summary>
+    private async Task EnsureNoOpenVisitAsync(long patientId, long doctorId, DateOnly day, long? exceptVisitId, CancellationToken ct)
+    {
+        var duplicate = await VisitQuery()
+            .Where(v => v.PatientId == patientId && v.DoctorId == doctorId && v.VisitDate == day
+                        && v.Id != (exceptVisitId ?? 0)
+                        && v.VisitStatus == VisitStatus.Registered
+                        && (v.QueueStatus == QueueStatus.Waiting || v.QueueStatus == QueueStatus.InConsultation
+                            || v.QueueStatus == QueueStatus.Booked))
+            .FirstOrDefaultAsync(ct);
+        if (duplicate is null)
+        {
+            return;
+        }
+
+        var when = day == clock.Today ? "today" : $"on {day:dd MMM yyyy}";
+        throw new ConflictException(duplicate.QueueStatus == QueueStatus.Booked
+            ? $"This patient already has an appointment {when} with {DoctorName(duplicate.Doctor)} ({duplicate.TokenNumber})."
+            : $"This patient already has an open visit {when} with {DoctorName(duplicate.Doctor)} (token {duplicate.TokenNumber}).");
+    }
+
+    /// <summary>Checks the payment for the amount the server decided. Returns the mode and reference.</summary>
+    private static (PaymentMode Mode, string? Reference) CheckPayment(PaymentInputDto? payment, decimal due, bool acute)
+    {
+        if (payment is null || payment.Amount != due)
+        {
+            throw new BadRequestException(acute
+                ? "Payment amount does not match the deposit."
+                : "Payment amount does not match the consultation fee.");
+        }
+
+        var mode = ParseEnum<PaymentMode>(payment.Mode) ?? throw new BadRequestException("Choose a payment mode.");
+        if (mode == PaymentMode.FollowUp)
+        {
+            throw new BadRequestException("Choose cash, UPI or card.");
+        }
+
+        var reference = string.IsNullOrWhiteSpace(payment.ReferenceNumber) ? null : payment.ReferenceNumber.Trim();
+        if (mode != PaymentMode.Cash && reference is null)
+        {
+            throw new BadRequestException("Transaction reference is required for UPI / card payments.");
+        }
+
+        if (reference == "0000")
+        {
+            // Demo hook to try the failure path (same as the mock).
+            throw new PaymentDeclinedException();
+        }
+
+        return (mode, reference);
+    }
+
+    private DateOnly OnDay(string? date) =>
+        DateOnly.TryParseExact(date, "yyyy-MM-dd", out var d) && d >= clock.Today ? d : clock.Today;
 
     /// <summary>Edit an open visit (department, doctor, visit type, reason, payer, Emergency/ICU details). No new charge.</summary>
     public async Task<RegistrationDto> UpdateVisitAsync(long visitId, VisitInputDto input, CancellationToken ct)
@@ -475,7 +616,8 @@ public sealed partial class RegistrationService(
         var start = clock.StartOf(today);
         var end = clock.StartOf(today.AddDays(1));
 
-        var todays = db.Visits.Where(v => v.VisitDate == today);
+        var todays = db.Visits.Where(v => v.VisitDate == today && v.VisitStatus != VisitStatus.Cancelled
+                                          && v.QueueStatus != QueueStatus.Booked); // appointments count once checked in
         var registered = await todays.CountAsync(ct);
         var waiting = await todays.CountAsync(v => v.QueueStatus == QueueStatus.Waiting, ct);
         var newPatients = await todays
@@ -485,9 +627,11 @@ public sealed partial class RegistrationService(
             .CountAsync(ct);
 
         var receipts = db.Receipts.Where(r => r.CollectedOn == today && r.Status == ReceiptStatus.Issued);
-        var mine = await receipts.Where(r => r.CollectedByUserId == userId).SumAsync(r => (decimal?)r.Amount, ct) ?? 0;
+        // Refunds (cancelled visits) are given back on the day they are paid out.
+        var mine = await receipts.Where(r => r.CollectedByUserId == userId)
+            .SumAsync(r => (decimal?)(r.Kind == ReceiptKind.Refund ? -r.Amount : r.Amount), ct) ?? 0;
         decimal? total = currentUser.HasPermission("COLLECTION_VIEW_ALL")
-            ? await receipts.SumAsync(r => (decimal?)r.Amount, ct) ?? 0
+            ? await receipts.SumAsync(r => (decimal?)(r.Kind == ReceiptKind.Refund ? -r.Amount : r.Amount), ct) ?? 0
             : null;
 
         return new TodaySummaryDto(registered, waiting, newPatients, mine, total);
@@ -501,9 +645,21 @@ public sealed partial class RegistrationService(
     {
         Require("QUEUE_VIEW");
         var day = DateOnly.TryParseExact(date, "yyyy-MM-dd", out var parsed) ? parsed : clock.Today;
+        var isToday = day == clock.Today;
 
+        // OP queue = OPD + Emergency of that day. Admitted patients (IP / ICU) are on the Inpatient queue.
+        // On today's queue also: EVERY earlier OPD visit that was never seen ("pending"), however old, so nothing
+        // silently drops off the desk's list. It stays until the desk moves or cancels it.
         var rows = await db.Visits.AsNoTracking()
-            .Where(v => v.VisitDate == day && v.VisitStatus != VisitStatus.Cancelled)
+            .Where(v => v.VisitStatus != VisitStatus.Cancelled
+                        && v.RegistrationType != RegistrationType.Ip
+                        && v.RegistrationType != RegistrationType.Icu
+                        && (v.VisitDate == day
+                            || (isToday
+                                && v.RegistrationType == RegistrationType.Op
+                                && v.VisitDate < day
+                                && v.VisitStatus == VisitStatus.Registered
+                                && (v.QueueStatus == QueueStatus.Waiting || v.QueueStatus == QueueStatus.Booked))))
             .OrderBy(v => v.CreatedAt)
             .Select(v => new
             {
@@ -523,7 +679,7 @@ public sealed partial class RegistrationService(
             })
             .ToListAsync(ct);
 
-        var items = rows.Select(r => new FrontDeskQueueItemDto(
+        var all = rows.Select(r => new FrontDeskQueueItemDto(
                 r.Visit.Id,
                 r.Visit.TokenNumber,
                 r.Visit.VisitNumber,
@@ -539,7 +695,7 @@ public sealed partial class RegistrationService(
                 r.DoctorName,
                 r.DepartmentName,
                 r.Visit.ReasonForVisit ?? "",
-                r.Visit.CreatedAt,
+                r.Visit.AdditionalDetails.CheckedInAt ?? r.Visit.AdditionalDetails.RescheduledAt ?? r.Visit.CreatedAt,
                 EnumText.ToCode(r.Visit.QueueStatus),
                 r.Visit.TriageLevel is { } triage ? EnumText.ToCode(triage) : "",
                 r.Visit.IsFollowUp,
@@ -551,23 +707,171 @@ public sealed partial class RegistrationService(
                 r.Encounter?.CompletedAt,
                 QueueLabStatus(r.Visit.QueueStatus, r.LabTests, r.LabPending),
                 r.Encounter?.FollowUpDate?.ToString("yyyy-MM-dd") ?? "",
-                r.Encounter is { AdmissionRequested: true, AdmissionType: { } admission } ? EnumText.ToCode(admission) : ""))
+                r.Encounter is { AdmissionRequested: true, AdmissionType: { } admission } ? EnumText.ToCode(admission) : "",
+                r.Visit.VisitDate.ToString("yyyy-MM-dd"),
+                r.Visit.AdditionalDetails.RescheduledFrom?.ToString("yyyy-MM-dd") ?? "",
+                EnumText.ToCode(r.Visit.Source)))
             .ToList();
 
+        var dayKey = day.ToString("yyyy-MM-dd");
+        var items = all.Where(i => i.VisitDate == dayKey).ToList();
+        var pending = all.Where(i => i.VisitDate != dayKey).OrderBy(i => i.VisitDate).ThenBy(i => i.RegisteredAt).ToList();
+        rows = rows.Where(r => r.Visit.VisitDate == day).ToList();
+
         var counts = new FrontDeskQueueCountsDto(
-            items.Count,
+            items.Count(i => i.QueueStatus != "BOOKED"),
             rows.Count(r => r.Visit.QueueStatus == QueueStatus.Waiting),
             rows.Count(r => r.Visit.QueueStatus == QueueStatus.InConsultation),
             rows.Count(r => r.Visit.QueueStatus == QueueStatus.Completed),
             rows.Count(r => r.Visit.QueueStatus == QueueStatus.AdmissionRequested),
             items.Count(i => i.LabStatus == "AWAITING_RESULTS"),
-            rows.Count(r => r.Visit.RegistrationType is RegistrationType.Emergency or RegistrationType.Icu));
+            rows.Count(r => r.Visit.RegistrationType is RegistrationType.Emergency or RegistrationType.Icu),
+            rows.Count(r => r.Visit.QueueStatus == QueueStatus.Booked));
 
         // Each doctor's status (available / paused with reason) and pace, for "expected time" at the desk.
         var doctors = await availability.BoardAsync(
             rows.GroupBy(r => r.Visit.DoctorId).Select(g => (g.Key, g.First().DoctorName)).ToList(), day, ct);
 
-        return new FrontDeskQueueDto(day.ToString("yyyy-MM-dd"), counts, items, doctors);
+        return new FrontDeskQueueDto(dayKey, counts, items, doctors, pending);
+    }
+
+    /// <summary>How far ahead a visit can be moved.</summary>
+    private const int RescheduleMaxDays = 30;
+
+    private const int MaxCancelReasonLength = 200;
+
+    /// <summary>
+    /// Cancel a visit the doctor hasn't seen yet (today's or a pending one from an earlier day). The visit stays in
+    /// the patient's history as CANCELLED with the reason. Refund = a refund receipt for what was paid, dated today,
+    /// so today's collection goes down by that amount (the original day's figures stay as they were).
+    /// </summary>
+    public async Task<RegistrationDto> CancelVisitAsync(long visitId, CancelVisitRequestDto request, CancellationToken ct)
+    {
+        Require("REGISTRATION_CREATE");
+        var visit = await VisitQuery().Include(v => v.Receipts).FirstOrDefaultAsync(v => v.Id == visitId, ct)
+                    ?? throw new NotFoundException("Visit not found.");
+        if (visit.VisitStatus != VisitStatus.Registered || visit.QueueStatus is not (QueueStatus.Waiting or QueueStatus.Booked))
+        {
+            throw new ConflictException("Only visits the doctor hasn't started can be cancelled.");
+        }
+
+        var reason = (request.Reason ?? "").Trim();
+        if (reason.Length == 0)
+        {
+            throw new AppValidationException("reason", "Enter why the visit is cancelled");
+        }
+
+        if (reason.Length > MaxCancelReasonLength)
+        {
+            throw new AppValidationException("reason", $"Maximum {MaxCancelReasonLength} characters");
+        }
+
+        var userId = currentUser.RequireUserId();
+        var now = clock.UtcNow;
+        var today = clock.Today;
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+
+        if (request.Refund)
+        {
+            Require("PAYMENT_COLLECT");
+            var paid = visit.Receipts.Where(r => r.Status == ReceiptStatus.Issued && r.Kind != ReceiptKind.Refund).ToList();
+            var refunded = visit.Receipts.Where(r => r.Status == ReceiptStatus.Issued && r.Kind == ReceiptKind.Refund).Sum(r => r.Amount);
+            var due = paid.Sum(r => r.Amount) - refunded;
+            if (due > 0)
+            {
+                var day = today.ToString("yyyyMMdd");
+                var seq = await sequences.NextAsync(visit.TenantId, "RECEIPT", day, ct);
+                db.Receipts.Add(new Receipt
+                {
+                    TenantId = visit.TenantId,
+                    VisitId = visit.Id,
+                    ReceiptNumber = $"RF-{day}-{seq:00000}",
+                    Kind = ReceiptKind.Refund,
+                    Amount = due,
+                    PaymentMode = paid.OrderByDescending(r => r.CollectedAt).First().PaymentMode,
+                    CollectedByUserId = userId,
+                    CollectedAt = now,
+                    CollectedOn = today,
+                    Status = ReceiptStatus.Issued,
+                });
+            }
+        }
+
+        visit.VisitStatus = VisitStatus.Cancelled;
+        visit.AdditionalDetails.CancelReason = reason;
+        visit.AdditionalDetails.CancelledAt = now;
+        visit.AdditionalDetails.CancelledByUserId = userId;
+        await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+
+        logger.LogInformation("Visit {VisitNumber} cancelled (refund: {Refund})", visit.VisitNumber, request.Refund);
+        return ToDto(visit);
+    }
+
+    /// <summary>
+    /// Move an OPD visit the doctor hasn't seen to today or a later day: it gets a token in that day's series and
+    /// shows on that day's queue (and the doctor's). Visit number and payment stay the same.
+    /// </summary>
+    public async Task<RegistrationDto> RescheduleVisitAsync(long visitId, RescheduleVisitRequestDto request, CancellationToken ct)
+    {
+        Require("REGISTRATION_CREATE");
+        var visit = await VisitQuery().FirstOrDefaultAsync(v => v.Id == visitId, ct)
+                    ?? throw new NotFoundException("Visit not found.");
+        if (visit.VisitStatus != VisitStatus.Registered || visit.QueueStatus is not (QueueStatus.Waiting or QueueStatus.Booked))
+        {
+            throw new ConflictException("Only visits the doctor hasn't started can be moved.");
+        }
+
+        if (visit.RegistrationType != RegistrationType.Op)
+        {
+            throw new ConflictException("Only OPD visits can be moved to another day.");
+        }
+
+        var today = clock.Today;
+        if (!DateOnly.TryParseExact(request.Date, "yyyy-MM-dd", out var target))
+        {
+            throw new AppValidationException("date", "Choose a date");
+        }
+
+        if (target < today)
+        {
+            throw new AppValidationException("date", "Choose today or a later date");
+        }
+
+        if (target > today.AddDays(RescheduleMaxDays))
+        {
+            throw new AppValidationException("date", $"Choose a date within {RescheduleMaxDays} days");
+        }
+
+        if (target == visit.VisitDate)
+        {
+            throw new AppValidationException("date", "The visit is already on this date");
+        }
+
+        await EnsureNoOpenVisitAsync(visit.PatientId, visit.DoctorId, target, visit.Id, ct);
+
+        // New token for that day. A booked appointment stays an appointment (checked in and paid on arrival).
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        var tokenSeq = await sequences.NextAsync(visit.TenantId, "TOKEN_A", target.ToString("yyyyMMdd"), ct);
+        var previousToken = visit.TokenNumber;
+        visit.AdditionalDetails.RescheduledFrom ??= visit.VisitDate;
+        visit.AdditionalDetails.RescheduledAt = clock.UtcNow;
+        visit.VisitDate = target;
+        visit.TokenNumber = $"A-{tokenSeq:000}";
+
+        var patient = await db.Patients.FirstAsync(p => p.Id == visit.PatientId, ct);
+        if (visit.QueueStatus != QueueStatus.Booked && (patient.LastVisitDate is null || patient.LastVisitDate < target))
+        {
+            patient.LastVisitDate = target;
+        }
+
+        await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+
+        logger.LogInformation(
+            "Visit {VisitNumber} moved to {Date}: token {OldToken} -> {NewToken}",
+            visit.VisitNumber, target, previousToken, visit.TokenNumber);
+        return ToDto(visit);
     }
 
     /// <summary>Same rule as the doctor's queue: only after the consultation, tests still pending or all results in.</summary>
@@ -592,21 +896,19 @@ public sealed partial class RegistrationService(
     // Until discharge exists, "admitted" = IP / ICU visits registered in the last InpatientWindowDays days.
     private const int InpatientWindowDays = 30;
 
-    // How long a doctor's admission request stays on the list while the desk hasn't admitted the patient.
-    private const int AwaitingAdmissionDays = 3;
 
     public async Task<InpatientListDto> GetInpatientsAsync(CancellationToken ct)
     {
         Require("QUEUE_VIEW");
         var today = clock.Today;
         var admittedFrom = today.AddDays(-InpatientWindowDays);
-        var requestedFrom = today.AddDays(-AwaitingAdmissionDays);
 
         var rows = await db.Visits.AsNoTracking()
             .Where(v => v.VisitStatus != VisitStatus.Cancelled
                         && (((v.RegistrationType == RegistrationType.Ip || v.RegistrationType == RegistrationType.Icu)
                              && v.VisitDate >= admittedFrom)
-                            || (v.QueueStatus == QueueStatus.AdmissionRequested && v.VisitDate >= requestedFrom)))
+                            // Admission requests stay until the patient is admitted (no time limit: never drop one).
+                            || v.QueueStatus == QueueStatus.AdmissionRequested))
             .Select(v => new
             {
                 Visit = v,
@@ -996,6 +1298,7 @@ public sealed partial class RegistrationService(
             Id = v.Id,
             RegistrationNumber = v.VisitNumber,
             RegistrationDate = v.CreatedAt,
+            VisitDate = v.VisitDate.ToString("yyyy-MM-dd"),
             RegistrationType = EnumText.ToCode(v.RegistrationType),
             PatientId = v.PatientId,
             DepartmentId = v.DepartmentId,

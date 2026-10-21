@@ -41,7 +41,9 @@ public sealed class ConsultationService(
             doctorId = me.Id; // doctors only ever see their own patients
         }
 
-        var query = db.Visits.AsNoTracking().Where(v => v.VisitDate == day && v.VisitStatus != VisitStatus.Cancelled);
+        // Booked appointments only reach the doctor once the desk checks the patient in.
+        var query = db.Visits.AsNoTracking()
+            .Where(v => v.VisitDate == day && v.VisitStatus != VisitStatus.Cancelled && v.QueueStatus != QueueStatus.Booked);
         if (doctorId is > 0)
         {
             query = query.Where(v => v.DoctorId == doctorId);
@@ -107,7 +109,8 @@ public sealed class ConsultationService(
                 EnumText.ToCode(r.Patient.Gender),
                 AgeOn(r.Patient.DateOfBirth, day),
                 r.Visit.ReasonForVisit ?? "",
-                r.Visit.CreatedAt,
+                // Arrived (checked in) / moved to today: waits from then, not from when it was first booked.
+                r.Visit.AdditionalDetails.CheckedInAt ?? r.Visit.AdditionalDetails.RescheduledAt ?? r.Visit.CreatedAt,
                 EnumText.ToCode(r.Visit.QueueStatus),
                 r.Visit.IsFollowUp,
                 r.IsReturning,
