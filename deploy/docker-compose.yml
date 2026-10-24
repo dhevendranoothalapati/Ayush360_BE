@@ -81,7 +81,7 @@ services:
 
   web:
     build:
-      context: ../../Frontend
+      context: ../../Frontend  #../../Ayush360_FE path for Rk local development
     environment:
       IDENTITY_API_URL: http://identity:8080
       HMS_API_URL: http://hms:8080
